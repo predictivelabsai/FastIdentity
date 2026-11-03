@@ -47,6 +47,15 @@ GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
 GOOGLE_ALLOWED_DOMAINS = {d.strip().lower() for d in os.getenv("GOOGLE_ALLOWED_DOMAINS", "").split(",") if d.strip()}
 GOOGLE_ALLOWED_EMAILS = {e.strip().lower() for e in os.getenv("GOOGLE_ALLOWED_EMAILS", "").split(",") if e.strip()}
 
+# --- SaaS / multi-tenancy ------------------------------------------------------------
+# Platform admins (FastSME staff) can open every workspace. Falls back to the
+# GOOGLE_ALLOWED_* lists used before workspaces existed.
+PLATFORM_ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("PLATFORM_ADMIN_EMAILS", "").split(",") if e.strip()} or GOOGLE_ALLOWED_EMAILS
+PLATFORM_ADMIN_DOMAINS = {d.strip().lower() for d in os.getenv("PLATFORM_ADMIN_DOMAINS", "").split(",") if d.strip()} or GOOGLE_ALLOWED_DOMAINS
+# Open sign-up: any verified Google account may create its own (empty) workspace.
+# When false, only invited users, allowed-domain users and platform admins get in.
+SIGNUP_OPEN = _bool("SIGNUP_OPEN", True)
+
 # --- data layer ----------------------------------------------------------------
 # DB_SOURCE picks the backend explicitly: "sqlite" (default, local file) or "psql".
 DB_SOURCE = os.getenv("DB_SOURCE", "sqlite").strip().lower()

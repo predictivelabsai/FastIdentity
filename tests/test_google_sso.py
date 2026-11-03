@@ -1,4 +1,4 @@
-"""Google SSO: state check, allow-list provisioning, existing staff, denial."""
+"""Google SSO: state check, sign-up rules, existing users, Google-only accounts."""
 import importlib
 
 import pytest
@@ -10,18 +10,16 @@ def client(monkeypatch):
     import settings
     monkeypatch.setattr(settings, "GOOGLE_CLIENT_ID", "cid")
     monkeypatch.setattr(settings, "GOOGLE_CLIENT_SECRET", "csecret")
-    monkeypatch.setattr(settings, "GOOGLE_ALLOWED_DOMAINS", {"predictivelabs.ai"})
-    monkeypatch.setattr(settings, "GOOGLE_ALLOWED_EMAILS", {"owner@gmail.com"})
     from ui import google_auth
     importlib.reload(google_auth)
     import app as app_mod
-    monkeypatch.setattr(app_mod, "google_auth", google_auth)
     import ui.auth as auth_mod
+    monkeypatch.setattr(app_mod, "google_auth", google_auth)
     monkeypatch.setattr(auth_mod, "google_auth", google_auth)
     return TestClient(app_mod.app), google_auth, monkeypatch
 
 
-def _login_via_google(c, google_auth, monkeypatch, email):
+def google_login(c, google_auth, monkeypatch, email):
     r = c.get("/auth/google", follow_redirects=False)
     assert r.status_code == 303 and "accounts.google.com" in r.headers["location"]
     state = r.headers["location"].split("state=")[1].split("&")[0]
@@ -31,7 +29,7 @@ def _login_via_google(c, google_auth, monkeypatch, email):
 
 def test_login_page_shows_google_button(client):
     c, *_ = client
-    assert "Sign in with Google" in c.get("/login").text
+    assert "Continue with Google" in c.get("/login").text
 
 
 def test_bad_state_rejected(client):
@@ -41,28 +39,26 @@ def test_bad_state_rejected(client):
     assert r.status_code == 200 and "expired" in r.text
 
 
-def test_allow_listed_domain_is_provisioned(client):
+def test_open_signup_lands_in_onboarding_with_no_data_access(client):
     c, google_auth, mp = client
-    r = _login_via_google(c, google_auth, mp, "new.person@predictivelabs.ai")
-    assert r.status_code == 303 and r.headers["location"] == "/"
-    from db import fetchone
-    row = fetchone("select * from staff_user where email=?", ["new.person@predictivelabs.ai"])
-    assert row and row["password_hash"] == "!google"
-    assert c.get("/profiles").status_code == 200
+    r = google_login(c, google_auth, mp, "founder@startup.io")
+    assert r.status_code == 303 and r.headers["location"] == "/onboarding"
+    assert c.get("/profiles", follow_redirects=False).headers["location"] == "/onboarding"
 
 
-def test_unknown_account_denied(client):
+def test_closed_signup_denies_strangers(client):
     c, google_auth, mp = client
-    r = _login_via_google(c, google_auth, mp, "stranger@gmail.com")
-    assert r.status_code == 200 and "not authorised" in r.text
+    import domain.tenancy as tenancy
+    mp.setattr(tenancy, "SIGNUP_OPEN", False)
+    r = google_login(c, google_auth, mp, "stranger@gmail.com")
+    assert r.status_code == 200 and "no access" in r.text
     from db import fetchone
     assert not fetchone("select id from staff_user where email=?", ["stranger@gmail.com"])
-    assert c.get("/profiles", follow_redirects=False).status_code == 303
 
 
 def test_google_only_account_cannot_password_login(client):
     c, google_auth, mp = client
-    _login_via_google(c, google_auth, mp, "owner@gmail.com")
+    google_login(c, google_auth, mp, "owner@gmail.com")
     c.get("/logout")
     r = c.post("/login", data={"email": "owner@gmail.com", "password": "!google"}, follow_redirects=False)
     assert r.status_code == 200 and "Invalid" in r.text

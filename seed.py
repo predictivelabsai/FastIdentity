@@ -18,11 +18,21 @@ from util import dumps, hash_password, new_id, new_write_key, now_iso
 
 
 def bootstrap(tenant_id: str = DEFAULT_TENANT):
+    """First boot: the demo workspace, the platform admin login, legacy migration."""
+    from domain.tenancy import add_member, create_user, get_user, migrate_legacy_users
+
     if not fetchone("select id from tenant where id=?", [tenant_id]):
-        insert_row("tenant", id=tenant_id, name=tenant_id.title(), created_at=now_iso())
-    if not fetchone("select id from staff_user where email=?", [ADMIN_EMAIL.lower()]):
-        insert_row("staff_user", id=new_id("u_"), tenant_id=tenant_id, email=ADMIN_EMAIL.lower(),
-                   password_hash=hash_password(ADMIN_PASSWORD), role="admin")
+        insert_row("tenant", id=tenant_id, name=tenant_id.title(), created_at=now_iso(), plan="free",
+                   join_role="analyst", created_by=ADMIN_EMAIL.lower())
+    if not get_user(ADMIN_EMAIL):
+        admin = create_user(ADMIN_EMAIL, "Platform admin", hash_password(ADMIN_PASSWORD))
+        add_member(tenant_id, admin, "owner", actor="bootstrap")
+    migrate_legacy_users()
+    bootstrap_workspace(tenant_id)
+
+
+def bootstrap_workspace(tenant_id: str):
+    """Starter kit for a new workspace: sources + keys, dry-run destination, flow templates, segments."""
     if not fetchone("select id from source where tenant_id=?", [tenant_id]):
         insert_row("source", id=new_id("src_"), tenant_id=tenant_id, name="Website", write_key=new_write_key(),
                    kind="js", allowed_origins="", created_at=now_iso())

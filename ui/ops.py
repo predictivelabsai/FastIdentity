@@ -184,8 +184,9 @@ def privacy_page(tenant_id: str, msg=None):
                  Button("Apply retention policy now", name="action", value="retention", cls="outline"), cls="row"),
              method="post", action="/privacy"),
         H3("API"),
+        P("Use a workspace secret key with the ", Code("privacy"), " scope (", A("Settings → API keys", href="/settings/api-keys"), ").", cls="muted"),
         Pre(f"""curl -X POST {PUBLIC_BASE_URL}/v1/erasure \\
-  -H "authorization: Bearer $ADMIN_API_TOKEN" -H "content-type: application/json" \\
+  -H "authorization: Bearer $FASTIDENTITY_SECRET_KEY" -H "content-type: application/json" \\
   -d '{{"email":"someone@example.com"}}'
 
 curl -X POST {PUBLIC_BASE_URL}/v1/export  ... same body ..."""),
@@ -218,9 +219,11 @@ def sources_page(tenant_id: str, base: str):
 </script>"""
         blocks.append(Article(
             Header(B(s["name"]), " ", pill(s["kind"]), " ", Small("origins: " + (s["allowed_origins"] or "env ALLOWED_ORIGINS"), cls="muted")),
-            P("Write key: ", Code(s["write_key"])),
+            (P("Publishable write key (safe in the browser): ", Code(s["write_key"])) if s["kind"] == "js" else
+             P("Server calls should use a secret key from ", A("Settings → API keys", href="/settings/api-keys"),
+               "; this source records them.", cls="muted")),
             Pre(snippet) if s["kind"] == "js" else Pre(f"""from sdk.fastidentity import FastIdentity
-fi = FastIdentity("{s['write_key']}", host="{base}")
+fi = FastIdentity(os.environ["FASTIDENTITY_SECRET_KEY"], host="{base}")  # fi_sk_…
 fi.identify(user_id="u_123", traits={{"email": "a@b.com"}}, consent={{"marketing_email": True}})
 fi.track("booking_completed", user_id="u_123", properties={{"treatment": "cataract"}})"""),
         ))

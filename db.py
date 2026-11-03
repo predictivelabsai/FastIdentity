@@ -29,6 +29,38 @@ CREATE TABLE IF NOT EXISTS staff_user (
     password_hash TEXT NOT NULL,
     role          TEXT NOT NULL DEFAULT 'admin'
 );
+-- SaaS: users are global; access to a workspace (tenant) is via membership.
+CREATE TABLE IF NOT EXISTS membership (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    role        TEXT NOT NULL DEFAULT 'analyst',
+    created_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS invite (
+    id          TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL,
+    email       TEXT NOT NULL,
+    role        TEXT NOT NULL DEFAULT 'analyst',
+    token_hash  TEXT NOT NULL,
+    invited_by  TEXT,
+    created_at  TEXT,
+    accepted_at TEXT,
+    revoked_at  TEXT
+);
+-- Secret server API keys (fi_sk_...). Only a SHA-256 hash is stored; shown once.
+CREATE TABLE IF NOT EXISTS api_key (
+    id           TEXT PRIMARY KEY,
+    tenant_id    TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    prefix       TEXT NOT NULL,
+    key_hash     TEXT NOT NULL,
+    scopes       TEXT NOT NULL DEFAULT 'ingest,privacy',
+    created_by   TEXT,
+    created_at   TEXT,
+    last_used_at TEXT,
+    revoked_at   TEXT
+);
 CREATE TABLE IF NOT EXISTS source (
     id               TEXT PRIMARY KEY,
     tenant_id        TEXT,
@@ -220,6 +252,23 @@ _INDEXES = [
     "create index if not exists ix_message_profile on message(profile_id, ts)",
     "create unique index if not exists ux_message_trigger on message(flow_id, trigger_event_id)",
     "create index if not exists ix_audit_ts on audit_log(tenant_id, ts)",
+    "create unique index if not exists ux_membership on membership(tenant_id, user_id)",
+    "create index if not exists ix_membership_user on membership(user_id)",
+    "create unique index if not exists ux_api_key_hash on api_key(key_hash)",
+    "create unique index if not exists ux_invite_token on invite(token_hash)",
+    "create unique index if not exists ux_staff_email on staff_user(email)",
+]
+
+# Additive column migrations (table, column, type) — applied when missing.
+_COLUMNS = [
+    ("tenant", "plan", "TEXT"),
+    ("tenant", "allowed_domains", "TEXT"),   # Google sign-ins from these domains auto-join
+    ("tenant", "join_role", "TEXT"),
+    ("tenant", "created_by", "TEXT"),
+    ("staff_user", "name", "TEXT"),
+    ("staff_user", "is_platform_admin", "INTEGER DEFAULT 0"),
+    ("staff_user", "last_tenant_id", "TEXT"),
+    ("staff_user", "created_at", "TEXT"),
 ]
 
 _pool = None
@@ -311,7 +360,7 @@ def update_row(table: str, pk, **updates):
 def init_db():
     # Strip SQL comment lines first (they may contain ';'), then split statements.
     sql = "\n".join(l for l in SCHEMA.splitlines() if not l.strip().startswith("--"))
-    statements = [s.strip() for s in sql.split(";") if s.strip()] + list(_INDEXES)
+    tables = [s.strip() for s in sql.split(";") if s.strip()]
     if USE_POSTGRES:
         # The web app and the worker start together; concurrent CREATE ... IF NOT
         # EXISTS races in Postgres (pg_type unique violation). Serialise the DDL
@@ -319,10 +368,21 @@ def init_db():
         with _get_pool().connection() as conn, conn.transaction():
             conn.execute("select pg_advisory_xact_lock(hashtext(%s))", [f"fastidentity:{DB_SCHEMA}"])
             conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{DB_SCHEMA}"')
-            for stmt in statements:
+            for stmt in tables:
+                conn.execute(_pg_sql(stmt))
+            for table, col, decl in _COLUMNS:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {decl}")
+            for stmt in _INDEXES:
                 conn.execute(_pg_sql(stmt))
         return
-    for stmt in statements:
+    for stmt in tables:
+        execute(stmt)
+    with _sqlite_conn() as conn:
+        for table, col, decl in _COLUMNS:
+            have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    for stmt in _INDEXES:
         execute(stmt)
 
 

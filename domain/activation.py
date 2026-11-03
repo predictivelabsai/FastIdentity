@@ -113,10 +113,15 @@ def run_all(tenant_id: str, now: datetime | None = None, actor: str = "worker") 
 def sync_profile(tenant_id: str, profile_id: str, destination_id: str, actor: str = "system") -> tuple[str, str]:
     """Push a resolved, consented contact to an ESP."""
     profile = get_profile(canonical_id(profile_id))
+    if not profile or profile["tenant_id"] != tenant_id:
+        return "skipped", "not_found"
+    row = fetchone("select * from destination where id=? and tenant_id=?", [destination_id, tenant_id])
+    if not row:
+        return "skipped", "unknown_destination"
     ok, reason = can_message(profile, "email")
     if not ok:
         return "skipped", reason
-    dest = destinations.build(fetchone("select * from destination where id=?", [destination_id]))
+    dest = destinations.build(row)
     traits = {k: v for k, v in loads(profile.get("traits_json")).items() if isinstance(v, (str, int, float, bool))}
     status, detail = dest.sync_profile(public_profile(profile), traits)
     audit(tenant_id, actor, "profile.synced", "profile", profile["id"], destination=destination_id, status=status)

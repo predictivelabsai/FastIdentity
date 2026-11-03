@@ -1,6 +1,7 @@
 from fasthtml.common import *
 
-from settings import DATA_REGION, DEFAULT_TENANT
+from settings import DATA_REGION
+from ui import context
 
 NAV = [
     ("Overview", [("/", "Dashboard", "dash")]),
@@ -12,6 +13,9 @@ NAV = [
                     ("/audit", "Audit log", "audit")]),
     ("Setup", [("/sources", "Sources & pixel", "sources")]),
 ]
+# (href, label, key, minimum role)
+SETTINGS_NAV = [("/settings/workspace", "Workspace", "ws", "viewer"), ("/settings/members", "Members", "members", "admin"),
+                ("/settings/api-keys", "API keys", "keys", "admin")]
 
 CSS = """
 :root { --pico-font-size: 15px; }
@@ -38,18 +42,49 @@ pre { max-height: 22rem; overflow:auto; }
 .row { display:flex; gap: .5rem; align-items: end; flex-wrap: wrap; }
 .row > * { margin-bottom: 0; }
 form.inline { display:inline; }
+.ws-name { font-weight: 600; font-size: .95rem; }
+.ws-switch select { font-size: .82rem; padding: .25rem .5rem; margin: .35rem 0 0; height: auto; }
+.secret { font-family: monospace; word-break: break-all; padding: .6rem .8rem; border-radius: 8px; border: 1px dashed var(--pico-primary); }
 button.small, a.small[role=button] { padding: .2rem .6rem; font-size: .8rem; }
 @media (max-width: 760px) { .shell { grid-template-columns: 1fr; } .side { border-right:0; } .content { padding: 1rem; } }
 """
 
 
+def _switcher(ctx):
+    opts = {m["tenant_id"]: m["name"] for m in ctx.get("member_of", [])}
+    if ctx.get("tenant_id") and ctx["tenant_id"] not in opts and ctx.get("workspace"):
+        opts[ctx["tenant_id"]] = ctx["workspace"]["name"] + " (platform)"
+    if len(opts) < 2:
+        return None
+    return Form(Select(*[Option(name, value=tid, selected=tid == ctx.get("tenant_id")) for tid, name in opts.items()],
+                       name="tenant_id", onchange="this.form.submit()", aria_label="Switch workspace"),
+                method="post", action="/workspace/switch", cls="ws-switch")
+
+
 def sidebar(active: str):
-    items = [H2(A("FastIdentity", href="/", style="padding:0")), Small(f"tenant {DEFAULT_TENANT} · region {DATA_REGION.upper()}", cls="muted")]
-    for group, links in NAV:
-        items.append(Div(group, cls="group"))
-        for href, label, key in links:
-            items.append(A(label, href=href, cls="on" if key == active else ""))
+    ctx = context.current()
+    ws = ctx.get("workspace") or {}
+    items = [H2(A("FastIdentity", href="/", style="padding:0")),
+             Div(ws.get("name") or "No workspace", cls="ws-name"),
+             Small(f"{ws.get('id', '—')} · region {DATA_REGION.upper()}", cls="muted"),
+             _switcher(ctx)]
+    if ws:
+        for group, links in NAV:
+            items.append(Div(group, cls="group"))
+            for href, label, key in links:
+                items.append(A(label, href=href, cls="on" if key == active else ""))
+        items.append(Div("Settings", cls="group"))
+        for href, label, key, need in SETTINGS_NAV:
+            if context.can(need):
+                items.append(A(label, href=href, cls="on" if key == active else ""))
+    if ctx.get("platform_admin"):
+        items.append(Div("Platform", cls="group"))
+        items.append(A("All workspaces", href="/platform/workspaces", cls="on" if active == "platform" else ""))
     items.append(Div("Account", cls="group"))
+    if ctx.get("email"):
+        items.append(Small(f"{ctx['email']} · {ctx.get('role') or 'no role'}", cls="muted",
+                           style="display:block;padding:0 .5rem;word-break:break-all"))
+    items.append(A("New workspace", href="/onboarding"))
     items.append(A("Log out", href="/logout"))
     return Aside(*items, cls="side")
 

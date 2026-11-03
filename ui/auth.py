@@ -1,62 +1,71 @@
 from fasthtml.common import *
 
-from db import fetchone, insert_row
-from settings import ADMIN_EMAIL, DEFAULT_TENANT
+from domain import tenancy
+from domain.audit import audit
 from ui import google_auth
-from util import new_id, verify_password
+from util import now_iso, verify_password
 
 GOOGLE_ONLY = "!google"  # password_hash marker: account can only sign in via Google
 
 
-def login_page(msg=""):
+def login_page(msg: str = "", note: str = ""):
     return Title("Sign in · FastIdentity"), Main(
         Article(
             H1("FastIdentity"),
             P("First-party, consent-first identity resolution.", cls="muted"),
+            P(note, cls="muted") if note else None,
             P(msg, style="color:#b00") if msg else None,
-            Form(
-                Label("Email", Input(name="email", type="email", value=ADMIN_EMAIL, required=True)),
-                Label("Password", Input(name="password", type="password", required=True)),
-                Button("Sign in", type="submit"),
-                method="post", action="/login",
+            (A("Continue with Google", href="/auth/google", role="button", style="width:100%")
+             if google_auth.enabled() else None),
+            Details(
+                Summary("Sign in with email and password", cls="muted"),
+                Form(
+                    Label("Email", Input(name="email", type="email", required=True)),
+                    Label("Password", Input(name="password", type="password", required=True)),
+                    Button("Sign in", type="submit", cls="secondary"),
+                    method="post", action="/login",
+                ),
+                open=not google_auth.enabled(),
             ),
-            (Div(P("or", cls="muted", style="text-align:center;margin:.5rem 0"),
-                 A("Sign in with Google", href="/auth/google", role="button", cls="outline",
-                   style="width:100%")) if google_auth.enabled() else None),
+            P(Small("New here? Continue with Google to create your workspace." if google_auth.enabled() else ""),
+              cls="muted"),
         ),
         cls="container", style="max-width:28rem;margin-top:4rem",
     )
 
 
-def _start_session(row, sess):
-    sess["auth"] = row["email"]
-    sess["tenant_id"] = row["tenant_id"]
-    sess["role"] = row["role"]
+def password_user(email: str, password: str):
+    user = tenancy.get_user(email)
+    if not user or not verify_password(password, user["password_hash"]):
+        return None
+    return user
 
 
-def try_login(email: str, password: str, sess) -> bool:
-    row = fetchone("select * from staff_user where email=?", [email.strip().lower()])
-    if not row or not verify_password(password, row["password_hash"]):
-        return False
-    _start_session(row, sess)
-    return True
+def google_user(email: str, name: str):
+    """Existing user, or a new one when sign-up is allowed for this email. None = denied."""
+    user = tenancy.get_user(email)
+    if user:
+        return user
+    if not tenancy.may_sign_up(email):
+        return None
+    user = tenancy.create_user(email, name, GOOGLE_ONLY)
+    audit(None, email, "user.signed_up", "user", email, method="google")
+    return user
 
 
-def google_login(email: str, sess) -> tuple[bool, bool]:
-    """Sign in a verified Google identity. Returns (ok, newly_provisioned).
+def finish_login(user: dict, sess, method: str) -> str:
+    """Start the session, join invited/allowed-domain workspaces, pick a workspace.
 
-    Existing staff may always use Google; unknown accounts are created only when
-    their email or domain is allow-listed (GOOGLE_ALLOWED_EMAILS / _DOMAINS).
+    Returns where to redirect: the dashboard, or onboarding when the user has no workspace.
     """
-    email = email.strip().lower()
-    row = fetchone("select * from staff_user where email=?", [email])
-    created = False
-    if not row:
-        if not google_auth.allow_listed(email):
-            return False, False
-        insert_row("staff_user", id=new_id("u_"), tenant_id=DEFAULT_TENANT, email=email,
-                   password_hash=GOOGLE_ONLY, role="admin")
-        row = fetchone("select * from staff_user where email=?", [email])
-        created = True
-    _start_session(row, sess)
-    return True, created
+    sess.clear()
+    sess["auth"] = user["email"]
+    joined = tenancy.accept_pending_invites(user) + tenancy.auto_join_domains(user)
+    tid = joined[0] if joined else tenancy.default_workspace(user)
+    if tid:
+        sess["tenant_id"] = tid
+        from db import update_row
+
+        update_row("staff_user", user["id"], last_tenant_id=tid)
+    audit(tid, user["email"], "staff.login", method=method, at=now_iso())
+    return "/" if tid else "/onboarding"

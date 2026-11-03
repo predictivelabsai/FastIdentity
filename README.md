@@ -30,6 +30,7 @@ The **[platform guide](docs/fastidentity_platform_guide.md)** ([PDF](docs/fastid
   - [Resolution rules](#resolution-rules)
   - [Probabilistic matching](#probabilistic-matching)
   - [Activation](#activation)
+- [Workspaces, members and API keys](#workspaces-members-and-api-keys)
 - [Installing on a website](#installing-on-a-website)
 - [Server-side SDK](#server-side-sdk)
 - [HTTP API](#http-api)
@@ -217,6 +218,33 @@ Seeded templates:
 
 FastIdentity decides **who** to message and **when**. Your ESP owns templates and delivery. Wiring up Klaviyo, Customer.io, Braze or your own webhook is covered in **[docs/esp_integration.md](docs/esp_integration.md)**.
 
+## Workspaces, members and API keys
+
+FastIdentity is multi-tenant, like a typical SaaS product.
+
+- **Workspace.** Every company is a workspace (a tenant). Profiles, identifiers, events, consent, suppression, flows, destinations and the audit log are all partitioned by workspace, and every query and every by-id route checks that partition. The same `userId` or email in two workspaces is two different people.
+- **Sign-up.** Anyone can continue with Google and create their own workspace, becoming its owner. A new workspace comes with two sources (pixel and backend), a dry-run destination, three abandonment-flow templates and three starter segments. Settings → Workspace has **Load sample data** to fill an empty workspace with demo visitors. Set `SIGNUP_OPEN=false` to make the platform invite-only.
+- **Members and roles.** Each member has one role per workspace:
+
+  | Role | Can do |
+  |---|---|
+  | `viewer` | Read-only |
+  | `analyst` | Viewer rights, plus review merges, run matching and build segments |
+  | `admin` | Analyst rights, plus manage flows, destinations, sources, API keys, members and privacy actions (export or erase) |
+  | `owner` | Admin rights, plus workspace settings and ownership |
+
+  Admins invite people by email. The invite link is shown once, and the invitee signs in with Google using that address. **Auto-join domains** (Settings → Workspace) let anyone signing in from, say, `@mymedicalgateway.com` join the workspace automatically as an analyst. A workspace always keeps at least one owner.
+- **Keys.** There are two kinds:
+  - The **publishable write key** (`wk_…`, on each source) is safe to put in the browser pixel and can only send events.
+  - **Secret API keys** (`fi_sk_…`, under Settings → API keys) authenticate your backend for `/v1/identify|track|page|consent` (`ingest` scope) and `/v1/erasure|export` (`privacy` scope). A secret key is shown once, stored only as a SHA-256 hash, can be revoked, and records when it was last used.
+- **Platform admins.** FastSME staff (`PLATFORM_ADMIN_EMAILS` and `PLATFORM_ADMIN_DOMAINS`, plus `ADMIN_EMAIL`) see **Platform → All workspaces**. From there they can open any workspace (each switch is audit-logged in that workspace) and create a customer workspace with an owner invite.
+
+**Onboarding a customer, for example MyMedicalGateway:**
+1. A platform admin creates the workspace `mymedicalgateway` with auto-join domain `mymedicalgateway.com` and invites the customer's lead as owner.
+2. The customer's developers sign in with Google and land in the workspace.
+3. An admin creates a secret key named "MMG production backend" with both scopes and stores it in MMG's secret store as `FASTIDENTITY_SECRET_KEY`.
+4. MMG's backend calls `/v1/identify` with `userId = str(user.id)`. Profiles are then mapped one-to-one to MMG users, inside the MMG workspace only.
+
 ## Installing on a website
 
 **1. Create a source.** In **Sources & pixel**, set `allowed_origins` to the site's origins. Copy the write key.
@@ -275,12 +303,12 @@ GET /collect/px?k=<write key>&aid=<anonymous id>&e=page_view&c=analytics,marketi
 
 ## Server-side SDK
 
-Use a source of kind **server**. Server sources are not consent-gated, so send only data you have a basis for.
+Authenticate with a workspace **secret key** (Settings → API keys). Server calls are not consent-gated, so send only data you have a basis for.
 
 ```python
 from sdk.fastidentity import FastIdentity
 
-fi = FastIdentity("wk_…", host="https://identity.fastsme.com")
+fi = FastIdentity(os.environ["FASTIDENTITY_SECRET_KEY"], host="https://identity.fastsme.com")  # fi_sk_…
 
 fi.identify(user_id="u_123", anonymous_id=request.cookies.get("_fi_aid"),
             traits={"email": "ada@example.com", "first_name": "Ada"},
@@ -288,7 +316,7 @@ fi.identify(user_id="u_123", anonymous_id=request.cookies.get("_fi_aid"),
                                          "wording": "Existing patient – similar services"}})
 fi.track("booking_completed", user_id="u_123", properties={"treatment": "cataract surgery", "value": 2450})
 fi.consent({"marketing_email": False}, email="ada@example.com")       # unsubscribe
-fi.erase(admin_token=ADMIN_API_TOKEN, email="ada@example.com")       # right to erasure
+fi.erase(admin_token=os.environ["FASTIDENTITY_SECRET_KEY"], email="ada@example.com")  # needs privacy scope
 ```
 
 Pass the browser's `_fi_aid` cookie as `anonymous_id`. That links server-side events to the browser session deterministically.
@@ -299,9 +327,9 @@ Pass the browser's `_fi_aid` cookie as `anonymous_id`. That links server-side ev
 |---|---|---|---|
 | `POST` | `/collect` | write key in body (`writeKey`) | one message or `{"batch": [...]}` (max 100). Responds `{"ok", "accepted"}` and never returns profile ids. Plain-text JSON avoids a CORS preflight. |
 | `GET` | `/collect/px` | `k=` write key | Query params as above. Returns a 1×1 GIF. |
-| `POST` | `/v1/identify` · `/v1/track` · `/v1/page` · `/v1/consent` | `Authorization: Bearer <write key>` | Segment-style: `userId`, `anonymousId`, `traits`, `event`, `properties`, `context`, `consent`, `messageId`, `timestamp` |
-| `POST` | `/v1/export` | `Authorization: Bearer $ADMIN_API_TOKEN` | `{"email"\|"phone"\|"user_id"\|"profile_id": …}`. Returns the subject-access bundle. |
-| `POST` | `/v1/erasure` | `Authorization: Bearer $ADMIN_API_TOKEN` | same lookup, optional `"keep_suppression": false` |
+| `POST` | `/v1/identify` · `/v1/track` · `/v1/page` · `/v1/consent` | `Authorization: Bearer fi_sk_…` (secret key, `ingest` scope) or a source write key | Segment-style: `userId`, `anonymousId`, `traits`, `event`, `properties`, `context`, `consent`, `messageId`, `timestamp` |
+| `POST` | `/v1/export` | `Authorization: Bearer fi_sk_…` (`privacy` scope) | `{"email"\|"phone"\|"user_id"\|"profile_id": …}`. Returns the subject-access bundle. |
+| `POST` | `/v1/erasure` | `Authorization: Bearer fi_sk_…` (`privacy` scope) | same lookup, optional `"keep_suppression": false` |
 | `GET` | `/health` | none | `{"ok": true}` |
 
 Message shape (all fields optional except an identifier):
@@ -337,7 +365,11 @@ Message shape (all fields optional except an identifier):
 | Consent | State per purpose, consent drops by day, suppression list, latest records, retention settings |
 | Privacy requests | Find by email, phone or user id, then export or erase. Apply retention now. |
 | Audit log | Every merge, unmerge, consent change, erasure, export, sync and admin action (no raw PII) |
-| Sources & pixel | Write keys, allowed origins, copy-paste snippets |
+| Sources & pixel | Publishable write keys, allowed origins, copy-paste snippets |
+| Settings → Workspace | Name, auto-join email domains, join role, sample data |
+| Settings → Members | Members and roles, email invites (link shown once), pending invites |
+| Settings → API keys | Create (shown once), scope and revoke secret keys; last-used time |
+| Platform → All workspaces | Platform admins only: every workspace, open any, create a customer workspace |
 
 ## Configuration
 
@@ -348,7 +380,10 @@ All settings come from environment variables (`.env` is loaded automatically). S
 | `SECRET_KEY` | `dev-only-change-me` | **Required in prod.** Session signing. |
 | `IDENTITY_HASH_SECRET` | `dev-only-hash-secret` | **Required in prod.** HMAC key for signals and suppression hashes. Keep it stable: rotating it unlinks historical signals and suppression entries. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `admin@fastsme.com` / `admin` | Bootstrap admin, created on first start. |
-| `ADMIN_API_TOKEN` | *(empty: API disabled)* | Bearer token for `/v1/erasure` and `/v1/export`. |
+| `ADMIN_API_TOKEN` | *(empty: disabled)* | Platform operator token for `/v1/erasure` and `/v1/export`; requires `tenant_id` in the body. Customers use secret keys instead. |
+| `SIGNUP_OPEN` | `true` | Any verified Google account may create its own workspace. `false` = invite, auto-join domain or platform admin only. |
+| `PLATFORM_ADMIN_EMAILS` / `PLATFORM_ADMIN_DOMAINS` | *(falls back to `GOOGLE_ALLOWED_*`)* | FastSME staff who can open every workspace. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | *(empty: Google sign-in off)* | Shared FastSME OAuth client; redirect is `<base>/auth/google/callback`. |
 | `PUBLIC_BASE_URL` | `http://localhost:5023` | Used in snippets and docs pages. |
 | `ALLOWED_ORIGINS` | `*` | Fallback CORS allow-list when a source has none. |
 | `DB_SOURCE` | `sqlite` | Backend switch: `sqlite` or `psql`. |

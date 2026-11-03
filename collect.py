@@ -19,6 +19,7 @@ from domain.audit import audit
 from domain.consent import PURPOSES, has_purpose, purposes_from_cmp, record_cmp, record_consent
 from domain.identity import extract_ids, find_identity, resolve, touch
 from domain.privacy import erase, export, lookup
+from domain.tenancy import KEY_PREFIX, authenticate_key, server_source
 from settings import ADMIN_API_TOKEN, ALLOWED_ORIGINS, DEFAULT_TENANT, REQUIRE_ANALYTICS_CONSENT
 from util import dumps, new_id, now_iso, to_iso
 
@@ -181,28 +182,48 @@ async def pixel(request: Request):
 
 
 async def server_api(request: Request, mtype: str):
-    """Segment-compatible server API: /v1/identify|track|page|consent."""
+    """Segment-compatible server API: /v1/identify|track|page|consent.
+
+    Authenticate with a workspace secret key (``Authorization: Bearer fi_sk_…``,
+    scope ``ingest``) or a source write key.
+    """
     body = await _json(request)
-    source = _source_for_key(_key_from(request, body))
+    key = _key_from(request, body)
+    if key and key.startswith(KEY_PREFIX):
+        api_key = authenticate_key(key, "ingest")
+        source = server_source(api_key["tenant_id"]) if api_key else None
+    else:
+        source = _source_for_key(key)
     if not source:
-        return JSONResponse({"error": "invalid write key"}, status_code=401)
+        return JSONResponse({"error": "invalid API key"}, status_code=401)
     body["type"] = mtype
     ip = body.get("context", {}).get("ip")
     return JSONResponse(process(source, body, ip))
 
 
-def _admin_ok(request: Request) -> bool:
+def _bearer(request: Request) -> str:
     header = request.headers.get("authorization") or ""
-    token = header.removeprefix("Bearer ").strip()
-    return bool(ADMIN_API_TOKEN) and hmac.compare_digest(token, ADMIN_API_TOKEN)
+    return header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
+
+
+def _privacy_tenant(request: Request, body: dict) -> str | None:
+    """Workspace for a privacy call: from a secret key with ``privacy`` scope, or the
+    platform ADMIN_API_TOKEN plus an explicit ``tenant_id`` (operator use only)."""
+    token = _bearer(request)
+    if token.startswith(KEY_PREFIX):
+        row = authenticate_key(token, "privacy")
+        return row["tenant_id"] if row else None
+    if ADMIN_API_TOKEN and token and hmac.compare_digest(token, ADMIN_API_TOKEN):
+        return body.get("tenant_id") or DEFAULT_TENANT
+    return None
 
 
 async def privacy_api(request: Request, action: str):
-    """POST /v1/erasure or /v1/export with {email|phone|user_id|profile_id}. Admin token."""
-    if not _admin_ok(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    """POST /v1/erasure or /v1/export with {email|phone|user_id|profile_id}."""
     body = await _json(request)
-    tenant_id = body.get("tenant_id") or DEFAULT_TENANT
+    tenant_id = _privacy_tenant(request, body)
+    if not tenant_id:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     pid = lookup(tenant_id, profile_id=body.get("profile_id"), email=body.get("email"),
                  phone=body.get("phone"), user_id=body.get("user_id"))
     if not pid:

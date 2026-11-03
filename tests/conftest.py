@@ -24,6 +24,14 @@ TABLES = ["profile", "identity", "signal", "event", "merge_log", "match_candidat
 def clean():
     for t in TABLES:
         execute(f"delete from {t}")
+    # SaaS layer: back to a single demo workspace owned by the platform admin.
+    for t in ("invite", "api_key", "membership"):
+        execute(f"delete from {t}")
+    for t in ("source", "destination", "flow", "segment"):
+        execute(f"delete from {t} where tenant_id != 'demo'")
+    execute("delete from tenant where id != 'demo'")
+    execute("delete from staff_user where email != 'admin@fastsme.com'")
+    execute("update staff_user set tenant_id='demo', last_tenant_id=null")
     bootstrap()
     yield
 
@@ -31,13 +39,13 @@ def clean():
 @pytest.fixture
 def web():
     from db import fetchone
-    return fetchone("select * from source where kind='js'")
+    return fetchone("select * from source where kind='js' and tenant_id='demo'")
 
 
 @pytest.fixture
 def server():
     from db import fetchone
-    return fetchone("select * from source where kind='server'")
+    return fetchone("select * from source where kind='server' and tenant_id='demo'")
 
 
 FULL = {"analytics": True, "marketing": True, "functional": True}
