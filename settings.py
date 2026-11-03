@@ -39,6 +39,14 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 # Server-to-server token for the privacy API (/v1/erasure, /v1/export) and the SDK.
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
 
+# Google SSO (optional). Shared FastSME OAuth client; redirect = <PUBLIC_BASE_URL>/auth/google/callback.
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
+# Google accounts not yet in staff_user are auto-provisioned only if allow-listed.
+GOOGLE_ALLOWED_DOMAINS = {d.strip().lower() for d in os.getenv("GOOGLE_ALLOWED_DOMAINS", "").split(",") if d.strip()}
+GOOGLE_ALLOWED_EMAILS = {e.strip().lower() for e in os.getenv("GOOGLE_ALLOWED_EMAILS", "").split(",") if e.strip()}
+
 # --- data layer ----------------------------------------------------------------
 # DB_SOURCE picks the backend explicitly: "sqlite" (default, local file) or "psql".
 DB_SOURCE = os.getenv("DB_SOURCE", "sqlite").strip().lower()

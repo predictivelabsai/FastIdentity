@@ -13,13 +13,14 @@ from domain.segments import refresh as refresh_segment
 from seed import bootstrap
 from settings import DEFAULT_TENANT, PORT, PUBLIC_BASE_URL, SECRET_KEY
 from ui import graph, ops
-from ui.auth import login_page, try_login
+from ui import google_auth
+from ui.auth import google_login, login_page, try_login
 from ui.layout import CSS
 from util import dumps, new_id, new_write_key, now_iso
 
 bootstrap()
 
-PUBLIC = ("/collect", "/v1/", "/static/", "/login", "/health")
+PUBLIC = ("/collect", "/v1/", "/static/", "/login", "/health", "/auth/google")
 
 
 def _before(req, sess):
@@ -32,7 +33,7 @@ def _before(req, sess):
 app, rt = fast_app(
     secret_key=SECRET_KEY,
     session_cookie="fastidentity_session",
-    before=Beforeware(_before, skip=[r"/collect.*", r"/v1/.*", r"/static/.*", r"/login", r"/health"]),
+    before=Beforeware(_before, skip=[r"/collect.*", r"/v1/.*", r"/static/.*", r"/login", r"/health", r"/auth/google.*"]),
     hdrs=(Style(CSS),),
 )
 
@@ -67,6 +68,33 @@ def post(email: str, password: str, sess):
         audit(T(sess), email, "staff.login")
         return back("/")
     return login_page("Invalid email or password")
+
+
+@rt("/auth/google")
+def get(request, sess):
+    if not google_auth.enabled():
+        return back("/login")
+    state = google_auth.new_state()
+    sess["google_state"] = state
+    return RedirectResponse(google_auth.authorize_url(request, state), status_code=303)
+
+
+@rt("/auth/google/callback")
+def get(request, sess, code: str = "", state: str = "", error: str = ""):
+    expected = sess.pop("google_state", None)
+    if error or not code or not expected or state != expected:
+        return login_page("Google sign-in was cancelled or expired. Please try again.")
+    ident = google_auth.exchange(request, code)
+    if not ident:
+        return login_page("Google sign-in failed.")
+    ok, created = google_login(ident["email"], sess)
+    if not ok:
+        audit(DEFAULT_TENANT, ident["email"], "staff.login_denied", method="google")
+        return login_page(f"{ident['email']} is not authorised for this workspace.")
+    if created:
+        audit(T(sess), ident["email"], "staff.provisioned", method="google")
+    audit(T(sess), ident["email"], "staff.login", method="google")
+    return back("/")
 
 
 @rt("/logout")
