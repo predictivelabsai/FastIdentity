@@ -1,6 +1,8 @@
 /*! FastIdentity first-party collector. Consent-first: nothing is stored or sent
  *  until the CMP grants "analytics". Device signals are only sent with
- *  "marketing"/"advertisement" consent and are hashed server-side.
+ *  "marketing"/"advertisement" consent and are hashed server-side. That
+ *  includes a first-party device id (localStorage) which survives reset() so a
+ *  shared device can be recognised, and is deleted when consent is withdrawn.
  *
  *  <script>
  *    window.FastIdentityConfig = { key: "wk_...", host: "https://t.example.com", cmp: "auto" };
@@ -16,6 +18,7 @@
   if (!cfg.key) return;
   var host = (cfg.host || "").replace(/\/$/, "");
   var COOKIE = "_fi_aid";
+  var DEVICE = "_fi_did"; // first-party device id: survives reset() (logout), not consent withdrawal
   var consent = null; // {analytics:bool, marketing:bool, functional:bool}
   var queue = [];
   var started = Date.now();
@@ -74,6 +77,15 @@
     d.cookie = COOKIE + "=; Max-Age=0; Path=/";
     try { w.localStorage.removeItem(COOKIE); } catch (e) {}
   }
+  function deviceId() {
+    var id = null;
+    try { id = w.localStorage.getItem(DEVICE); } catch (e) { return null; }
+    if (!id) { id = uuid(); try { w.localStorage.setItem(DEVICE, id); } catch (e) { return null; } }
+    return id;
+  }
+  function forgetDevice() {
+    try { w.localStorage.removeItem(DEVICE); } catch (e) {}
+  }
 
   // ---------- context ----------
   function utm() {
@@ -96,7 +108,7 @@
       ctx.screen = { width: screen.width, height: screen.height, density: w.devicePixelRatio || 1 };
       ctx.timezone = (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone;
       ctx.locale = navigator.language;
-      ctx.device = { platform: navigator.platform };
+      ctx.device = { platform: navigator.platform, id: deviceId() };
     }
     return ctx;
   }
@@ -133,8 +145,10 @@
       queue = [];
       // Record the withdrawal against the existing id, then delete it.
       if (prev && prev.analytics) { send({ type: "consent" }); forget(); }
+      forgetDevice();
       return;
     }
+    if (!consent.marketing) forgetDevice();
     if (!prev || prev.analytics !== consent.analytics || prev.marketing !== consent.marketing) {
       send({ type: "consent" });
     }

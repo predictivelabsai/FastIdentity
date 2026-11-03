@@ -7,6 +7,8 @@ Definition: ``{"all": [rule, ...]}`` where a rule is one of
 * ``{"type": "interest", "key": "treatment", "value": "hip replacement"}``
 * ``{"type": "event", "event": "booking_started", "min": 1, "days": 30}``
 * ``{"type": "consent", "purpose": "marketing_email"}``
+* ``{"type": "device", "value": "mobile"}``  (desktop / mobile / tablet / tv; any device used)
+* ``{"type": "household", "min": 2}``  (member of a household of at least ``min`` profiles)
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from db import fetchall, fetchone, update_row
 from domain.consent import has_purpose
 from util import days_ago_iso, loads, now_iso
 
-RULE_TYPES = ["status", "trait", "interest", "event", "consent"]
+RULE_TYPES = ["status", "trait", "interest", "event", "consent", "device", "household"]
 
 
 def _match(rule: dict, p: dict) -> bool:
@@ -34,6 +36,13 @@ def _match(rule: dict, p: dict) -> bool:
         return n >= int(rule.get("min") or 1)
     if t == "consent":
         return has_purpose(p["id"], rule.get("purpose"))
+    if t == "device":
+        return bool(fetchone("select id from device where profile_id=? and device_class=?",
+                             [p["id"], str(rule.get("value", "")).lower()]))
+    if t == "household":
+        row = fetchone("select h.members from household h join household_member m on m.household_id=h.id "
+                       "where m.profile_id=?", [p["id"]])
+        return bool(row) and row["members"] >= int(rule.get("min") or 2)
     return False
 
 

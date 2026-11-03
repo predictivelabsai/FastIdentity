@@ -6,6 +6,7 @@ from ui import context
 NAV = [
     ("Overview", [("/", "Dashboard", "dash")]),
     ("Identity graph", [("/profiles", "Profiles", "profiles"), ("/events", "Events", "events"),
+                        ("/households", "Devices & households", "households"),
                         ("/candidates", "Merge candidates", "candidates"), ("/quality", "Match quality", "quality")]),
     ("Activation", [("/segments", "Segments", "segments"), ("/flows", "Flows", "flows"),
                     ("/destinations", "Destinations", "destinations")]),

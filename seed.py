@@ -11,7 +11,7 @@ import random
 import sys
 from datetime import datetime, timedelta, timezone
 
-from db import fetchone, insert_row
+from db import execute, fetchone, insert_row
 from domain.activation import FLOW_TEMPLATES
 from settings import ADMIN_EMAIL, ADMIN_PASSWORD, DEFAULT_TENANT
 from util import dumps, hash_password, new_id, new_write_key, now_iso
@@ -80,6 +80,11 @@ def demo(tenant_id: str = DEFAULT_TENANT, people: int = 25, seed: int = 7):
     def ts(hours_ago):
         return (now - timedelta(hours=hours_ago)).isoformat()
 
+    if tenant_id == DEFAULT_TENANT:
+        # Only the demo workspace; customers opt in themselves (it changes what is collected).
+        execute("update tenant set households_enabled=1 where id=?", [tenant_id])
+    homes = []
+
     def ctx(dev, cmp):
         ua, scr = dev
         return {"consent": cmp, "userAgent": ua, "screen": {"width": scr[0], "height": scr[1], "density": scr[2]},
@@ -130,14 +135,61 @@ def demo(tenant_id: str = DEFAULT_TENANT, people: int = 25, seed: int = 7):
                 process(web, {"type": "track", "event": "product_viewed", "anonymousId": f"anon-{i}-hh",
                               "timestamp": ts(rnd.uniform(2, 10)), "context": ctx(other, cmp),
                               "properties": {"treatment": rnd.choice(TREATMENTS)}}, ip)
+        homes.append((ip, cmp, c, aid))
+    _demo_households(tenant_id, rnd, homes, ts, ctx)
+
+
+def _demo_households(tenant_id, rnd, homes, ts, ctx):
+    """Couples and families on one home IP over several days, a shared family tablet,
+    and patients using the mobile app (explicit device ids via the backend source)."""
+    from collect import process
+
+    web = fetchone("select * from source where tenant_id=? and kind='js'", [tenant_id])
+    backend = fetchone("select * from source where tenant_id=? and kind='server'", [tenant_id])
+    tablet = ("Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1",
+              (820, 1180, 2))
+    consenting = [h for h in homes if h[1].get("marketing")]
+    for n, (ip, cmp, c, aid) in enumerate(consenting[:6]):
+        # The primary visitor comes back from home on another day.
+        process(web, {"type": "page", "anonymousId": aid, "timestamp": ts(rnd.uniform(30, 60)), "context": c,
+                      "properties": {"path": "/my-bookings"}}, ip)
+        # A partner with their own phone and account on the same home IP, two different days.
+        pemail = f"partner.{n}@example.com"
+        phone = (UAS[2 + n % 2], (390 + 3 * n, 844 + n, 3))  # each partner's own handset
+        for k, hours in enumerate((rnd.uniform(26, 48), rnd.uniform(3, 20))):
+            msg = {"type": "identify" if k == 0 else "page", "anonymousId": f"anon-partner-{n}",
+                   "timestamp": ts(hours), "context": ctx(phone, cmp), "properties": {"path": "/treatments"}}
+            if k == 0:
+                msg["traits"] = {"email": pemail, "first_name": "Partner"}
+            process(web, msg, ip)
+        # Every other home also has a family tablet used by both of them.
+        if n % 2 == 0:
+            home_tablet = (tablet[0], (tablet[1][0] + n, tablet[1][1], tablet[1][2]))
+            for who, hours in ((aid, rnd.uniform(28, 40)), (f"anon-partner-{n}", rnd.uniform(4, 12))):
+                process(web, {"type": "page", "anonymousId": who, "timestamp": ts(hours),
+                              "context": ctx(home_tablet, cmp), "properties": {"path": "/treatments"}}, ip)
+    # Mobile app users: the backend forwards the app's device id (iOS identifierForVendor style).
+    for n in range(4):
+        uid = f"mmg-{1000 + n}"
+        app_ctx = {"device": {"id": f"8F1C2A{n:02d}-6B1E-4C1D-9C55-0A1B2C3D4E{n:02d}", "type": "ios" if n % 2 else "android",
+                              "model": "app"},
+                   "userAgent": "MMG/3.2 (iPhone; iOS 17.5) CFNetwork" if n % 2 else "MMG/3.2 (Linux; Android 14) okhttp/4.12",
+                   "consent": {"analytics": True, "marketing": True}}
+        process(backend, {"type": "identify", "userId": uid, "timestamp": ts(rnd.uniform(5, 50)), "context": app_ctx,
+                          "traits": {"email": f"app.user{n}@example.com"}}, f"81.{n + 10}.4.{20 + n}")
+        process(backend, {"type": "track", "event": "appointment_viewed", "userId": uid, "timestamp": ts(rnd.uniform(1, 4)),
+                          "context": app_ctx, "properties": {"treatment": rnd.choice(TREATMENTS)}}, f"81.{n + 10}.4.{20 + n}")
 
 
 if __name__ == "__main__":
     bootstrap()
     if "--demo" in sys.argv:
         demo()
+        from domain.households import rebuild
+        print("households:", rebuild(DEFAULT_TENANT, actor="seed"))
         from domain.matching import run_matching
         print("matching:", run_matching(DEFAULT_TENANT, actor="seed"))
+        print("households after merges:", rebuild(DEFAULT_TENANT, actor="seed"))
         from domain.segments import refresh
         from db import fetchall
         for s in fetchall("select id from segment where tenant_id=?", [DEFAULT_TENANT]):

@@ -32,8 +32,8 @@ def segment_list(tenant_id: str):
         Form(
             Input(name="name", placeholder="Segment name", required=True),
             *[Div(Select(Option("—", value=""), *[Option(t, value=t) for t in RULE_TYPES], name=f"type{i}"),
-                  Input(name=f"a{i}", placeholder="field / key / event / purpose / status"),
-                  Input(name=f"b{i}", placeholder="value (or min count for event)"),
+                  Input(name=f"a{i}", placeholder="field / key / event / purpose / status / device class"),
+                  Input(name=f"b{i}", placeholder="value (or min count for event / household)"),
                   Input(name=f"c{i}", placeholder="days (event only)", style="max-width:10rem"), cls="row")
               for i in range(3)],
             Button("Create"), method="post", action="/segments",
@@ -58,6 +58,10 @@ def segment_from_form(form: dict) -> dict:
             rules.append({"type": t, "event": a, "min": int(b or 1), "days": int(c or 30)})
         elif t == "consent":
             rules.append({"type": t, "purpose": a or "marketing_email"})
+        elif t == "device":
+            rules.append({"type": t, "value": (a or b or "mobile").lower()})
+        elif t == "household":
+            rules.append({"type": t, "min": int(b or a or 2)})
     return {"all": rules}
 
 

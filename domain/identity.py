@@ -202,7 +202,7 @@ def merge(tenant_id: str, survivor_id: str, loser_id: str, method: str = "manual
                phone=survivor.get("phone") or loser.get("phone"))
     update_row("profile", loser_id, merged_into=survivor_id)
 
-    for table in ("identity", "signal", "event"):
+    for table in ("identity", "signal", "event", "device"):
         execute(f"update {table} set profile_id=? where profile_id=?", [survivor_id, loser_id])
     consent_mod.copy_consent(tenant_id, loser_id, survivor_id)
     execute("update match_candidate set status='superseded' where status='pending' and (left_id=? or right_id=?)",
@@ -238,7 +238,7 @@ def unmerge(tenant_id: str, merge_id: str, actor: str = "system") -> bool:
                     nxt.append(r["id"])
         frontier = nxt
     marks = ",".join("?" for _ in family)
-    for table in ("identity", "signal", "event"):
+    for table in ("identity", "signal", "event", "device"):
         execute(f"update {table} set profile_id=? where origin_profile_id in ({marks})", [loser_id, *family])
 
     update_row("profile", loser_id, merged_into=None)

@@ -10,7 +10,7 @@ from db import execute, fetchall, fetchone
 from domain.audit import audit
 from domain.consent import current_consent, suppress
 from domain.identity import ID_TYPES, _normalize, canonical_id, find_identity, get_profile
-from settings import ANON_PROFILE_RETENTION_DAYS, EVENT_RETENTION_DAYS
+from settings import ANON_PROFILE_RETENTION_DAYS, EVENT_RETENTION_DAYS, HOUSEHOLD_WINDOW_DAYS
 from util import days_ago_iso, loads, now_iso
 
 
@@ -49,6 +49,12 @@ def export(tenant_id: str, profile_id: str) -> dict:
         "linked_profiles": fam,
         "identifiers": [{"type": r["id_type"], "value": r["id_value"], "since": r["created_at"]}
                         for r in fetchall(f"select * from identity where profile_id in ({marks})", fam)],
+        "devices": [{"class": d["device_class"], "os": d["os"], "browser": d["browser"], "id_kind": d["key_kind"],
+                     "first_seen": d["first_seen"], "last_seen": d["last_seen"]}
+                    for d in fetchall(f"select * from device where profile_id in ({marks})", fam)],
+        # Membership only: other members are other people and are not disclosed.
+        "household": [{"household_id": r["household_id"], "since": r["first_seen"]}
+                      for r in fetchall(f"select * from household_member where profile_id in ({marks})", fam)],
         "consent": current_consent(profile_id),
         "consent_history": fetchall(
             f"select purpose, granted, legal_basis, source, ts from consent_record where profile_id in ({marks}) order by ts", fam),
@@ -70,7 +76,8 @@ def erase(tenant_id: str, profile_id: str, actor: str, keep_suppression: bool = 
             suppress(tenant_id, "email" if r["id_type"] == "email" else "sms", r["id_value"],
                      reason="erasure", actor=actor)
     for table, col in (("event", "profile_id"), ("event", "origin_profile_id"), ("identity", "profile_id"),
-                       ("signal", "profile_id"), ("consent_record", "profile_id"), ("message", "profile_id")):
+                       ("signal", "profile_id"), ("device", "profile_id"), ("household_member", "profile_id"),
+                       ("consent_record", "profile_id"), ("message", "profile_id")):
         n = fetchone(f"select count(*) as n from {table} where {col} in ({marks})", fam)["n"]
         counts[table] = counts.get(table, 0) + n
         execute(f"delete from {table} where {col} in ({marks})", fam)
@@ -93,10 +100,15 @@ def apply_retention(tenant_id: str, actor: str = "worker") -> dict:
         "select id from profile where tenant_id=? and status='anonymous' and merged_into is null "
         "and erased_at is null and last_seen<?", [tenant_id, anon_cut])]
     for pid in stale:
-        for table in ("event", "identity", "signal", "consent_record"):
+        for table in ("event", "identity", "signal", "device", "household_member", "consent_record"):
             execute(f"delete from {table} where profile_id=?", [pid])
         execute("delete from match_candidate where left_id=? or right_id=?", [pid, pid])
         execute("delete from profile where id=?", [pid])
-    result = {"events_deleted": n_events, "anonymous_profiles_deleted": len(stale)}
+    # Household IPs expire: a home address is only meaningful while it is current.
+    hh_cut = days_ago_iso(HOUSEHOLD_WINDOW_DAYS)
+    n_ips = fetchone("select count(*) as n from signal where tenant_id=? and signal_type='hh_ip' and last_seen<?",
+                     [tenant_id, hh_cut])["n"]
+    execute("delete from signal where tenant_id=? and signal_type='hh_ip' and last_seen<?", [tenant_id, hh_cut])
+    result = {"events_deleted": n_events, "anonymous_profiles_deleted": len(stale), "household_ips_expired": n_ips}
     audit(tenant_id, actor, "retention.applied", "tenant", tenant_id, **result)
     return result

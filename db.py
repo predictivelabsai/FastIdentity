@@ -109,6 +109,44 @@ CREATE TABLE IF NOT EXISTS signal (
     last_seen          TEXT DEFAULT '',
     seen_count         INTEGER DEFAULT 1
 );
+-- Devices a profile has used. device_key is a keyed hash of an explicit device
+-- id (app/SDK) or, failing that, the browser fingerprint. Only coarse,
+-- non-identifying descriptors (class / OS / browser family) are kept in clear.
+CREATE TABLE IF NOT EXISTS device (
+    id                 TEXT PRIMARY KEY,
+    tenant_id          TEXT,
+    profile_id         TEXT NOT NULL,
+    origin_profile_id  TEXT NOT NULL,
+    device_key         TEXT NOT NULL,
+    key_kind           TEXT NOT NULL DEFAULT 'fingerprint',
+    device_class       TEXT DEFAULT 'unknown',
+    os                 TEXT DEFAULT '',
+    browser            TEXT DEFAULT '',
+    first_seen         TEXT DEFAULT '',
+    last_seen          TEXT DEFAULT '',
+    seen_count         INTEGER DEFAULT 1
+);
+-- Households: profiles that repeatedly share a residential IP. A grouping of
+-- distinct people, never a merge. Rebuilt by the worker; opt-in per workspace.
+CREATE TABLE IF NOT EXISTS household (
+    id           TEXT PRIMARY KEY,
+    tenant_id    TEXT,
+    status       TEXT NOT NULL DEFAULT 'household',
+    members      INTEGER DEFAULT 0,
+    devices      INTEGER DEFAULT 0,
+    networks     INTEGER DEFAULT 0,
+    first_seen   TEXT DEFAULT '',
+    last_seen    TEXT DEFAULT '',
+    updated_at   TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS household_member (
+    household_id  TEXT NOT NULL,
+    tenant_id     TEXT,
+    profile_id    TEXT NOT NULL,
+    first_seen    TEXT DEFAULT '',
+    last_seen     TEXT DEFAULT '',
+    PRIMARY KEY (household_id, profile_id)
+);
 -- Append-only event log (profile_id is re-pointed on merge; origin is not).
 CREATE TABLE IF NOT EXISTS event (
     id                 TEXT PRIMARY KEY,
@@ -257,6 +295,11 @@ _INDEXES = [
     "create unique index if not exists ux_api_key_hash on api_key(key_hash)",
     "create unique index if not exists ux_invite_token on invite(token_hash)",
     "create unique index if not exists ux_staff_email on staff_user(email)",
+    "create unique index if not exists ux_device on device(tenant_id, origin_profile_id, device_key)",
+    "create index if not exists ix_device_profile on device(profile_id)",
+    "create index if not exists ix_device_key on device(tenant_id, device_key)",
+    "create index if not exists ix_household_member_profile on household_member(profile_id)",
+    "create index if not exists ix_household_tenant on household(tenant_id)",
 ]
 
 # Additive column migrations (table, column, type) — applied when missing.
@@ -265,6 +308,7 @@ _COLUMNS = [
     ("tenant", "allowed_domains", "TEXT"),   # Google sign-ins from these domains auto-join
     ("tenant", "join_role", "TEXT"),
     ("tenant", "created_by", "TEXT"),
+    ("tenant", "households_enabled", "INTEGER DEFAULT 0"),  # opt-in household grouping
     ("staff_user", "name", "TEXT"),
     ("staff_user", "is_platform_admin", "INTEGER DEFAULT 0"),
     ("staff_user", "last_tenant_id", "TEXT"),

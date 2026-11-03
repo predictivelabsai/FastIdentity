@@ -7,7 +7,10 @@ blocking, rules and the merge policy stay the same.
 
 Policy (see README "Resolution rules"):
 
-* Pairs are only formed by blocking on a shared device or network hash.
+* Pairs are only formed by blocking on a shared device, device id or network hash.
+* The household IP (``hh_ip``) is deliberately not evidence: sharing a home
+  router says two profiles live together, not that they are one person.
+  Candidates inside one household are flagged so reviewers see it.
 * Both profiles must have ``identity_resolution`` consent, or the pair is skipped.
 * Auto-merge only anonymous → known, and only at ``AUTO_MERGE_THRESHOLD``.
 * An anonymous profile matching more than one known person is never auto-merged.
@@ -29,6 +32,7 @@ PRIOR = 0.001  # P(match) for a random blocked pair before evidence
 
 # (m, u): P(agree | match), P(agree | non-match). Disagreement uses (1-m, 1-u).
 COMPARISONS = {
+    "device_id": (0.95, 0.0001),  # explicit app/SDK id: one physical device (may still be shared)
     "device": (0.90, 0.0005),
     "net": (0.70, 0.01),
     "ua_family": (0.95, 0.30),
@@ -61,7 +65,7 @@ def blocked_pairs(tenant_id: str) -> set[tuple[str, str]]:
         "join signal b on a.tenant_id=b.tenant_id and a.signal_type=b.signal_type "
         "and a.value_hash=b.value_hash and a.profile_id < b.profile_id "
         "join profile pa on pa.id=a.profile_id join profile pb on pb.id=b.profile_id "
-        "where a.tenant_id=? and a.signal_type in ('device','net') "
+        "where a.tenant_id=? and a.signal_type in ('device','device_id','net') "
         "and pa.merged_into is null and pb.merged_into is null "
         "and pa.erased_at is null and pb.erased_at is null",
         [tenant_id],
@@ -83,6 +87,8 @@ def score_pair(sig_a: dict, sig_b: dict, prof_a: dict, prof_b: dict) -> tuple[fl
             a, b = sig_a.get(name, set()), sig_b.get(name, set())
             if not a or not b:
                 continue  # missing -> neutral
+            if name == "device" and sig_a.get("device_id") and sig_b.get("device_id"):
+                continue  # the explicit id already answers "same device?"; don't count it twice
             agree = bool(a & b)
         bf = (m / u) if agree else ((1 - m) / (1 - u))
         log_odds += math.log(bf)
@@ -131,6 +137,8 @@ def run_matching(tenant_id: str, actor: str = "system") -> dict:
     stats = {"pairs": 0, "no_consent": 0, "candidates": 0, "auto_merged": 0, "engine": "builtin"}
     sigs = _signal_sets(tenant_id)
     pairs = blocked_pairs(tenant_id)
+    household_of = {r["profile_id"]: r["household_id"] for r in fetchall(
+        "select profile_id, household_id from household_member where tenant_id=?", [tenant_id])}
     profs = {}
 
     def prof(pid):
@@ -159,6 +167,8 @@ def run_matching(tenant_id: str, actor: str = "system") -> dict:
             prob, engine = splink_scores[(left, right)], "splink"
         if prob < REVIEW_THRESHOLD:
             continue
+        if household_of.get(left) and household_of.get(left) == household_of.get(right):
+            features["household"] = {"agree": True, "bf": 1.0, "note": "same household - may be two people"}
         if fetchone("select id from match_candidate where tenant_id=? and left_id=? and right_id=?",
                     [tenant_id, left, right]):
             continue

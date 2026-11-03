@@ -4,6 +4,7 @@ from fasthtml.common import *
 from db import fetchall, fetchone
 from domain.audit import recent
 from domain.consent import PURPOSES, current_consent
+from domain import households as hh
 from domain.identity import get_profile, identities_of, merge_history
 from domain.matching import quality_metrics
 from ui.layout import kpi, kv_table, page, pct, pill, short
@@ -131,6 +132,7 @@ def profile_detail(tenant_id: str, pid: str):
                                                  for s in sigs])) if sigs else P(Em("None (no identity_resolution consent or no signals)"), cls="muted")),
             cls="grid",
         ),
+        _devices_block(p),
         H3("Consent"), _consent_block(p),
         Div(Div(H3("Interests"), kv_table({k: ", ".join(f"{v} ×{n}" for v, n in b.items()) for k, b in loads(p["interests_json"]).items()})),
             Div(H3("Traits"), kv_table(loads(p["traits_json"]))), cls="grid"),
@@ -142,6 +144,112 @@ def profile_detail(tenant_id: str, pid: str):
                          Td(Small(m["reason"][:100]))) for m in msgs])) if msgs else P(Em("None"), cls="muted"),
         _merges(pid),
         active="profiles",
+    )
+
+
+DEVICE_ICON = {"mobile": "📱", "tablet": "📲", "desktop": "🖥", "tv": "📺", "bot": "🤖"}
+
+
+def device_label(d: dict) -> str:
+    parts = [d.get("device_class") or "unknown", d.get("os"), d.get("browser")]
+    return f"{DEVICE_ICON.get(d.get('device_class'), '❔')} " + " · ".join(x for x in parts if x)
+
+
+def _devices_block(p: dict):
+    devs = hh.devices_of(p["id"])
+    house = hh.household_of(p["id"])
+    house_line = (P("Household ", A(short(house["id"]), href=f"/households/{house['id']}"), f" — {house['members']} people, "
+                    f"{house['devices']} devices", cls="muted") if house else None)
+    if not devs:
+        return Div(H3("Devices"), P(Em("None recorded (needs identity_resolution consent and a user agent or device id)."),
+                                    cls="muted"), house_line)
+    return Div(H3(f"Devices ({len(devs)})"), house_line, Table(
+        Thead(Tr(Th("Device"), Th("Identified by"), Th("First seen"), Th("Last seen"), Th("Hits"), Th("Shared"))),
+        Tbody(*[Tr(Td(device_label(d)),
+                   Td(pill("device id", "ok") if d["key_kind"] == "device_id" else pill("fingerprint")),
+                   Td(Small((d["first_seen"] or "")[:16])), Td(Small((d["last_seen"] or "")[:16])), Td(d["seen_count"]),
+                   Td(pill(f"+{d['shared_with']} other profile(s)", "warn") if d["shared_with"] else Small("—", cls="muted")))
+                for d in devs])))
+
+
+def _who(pid):
+    p = get_profile(pid) or {}
+    return A(p.get("email") or p.get("user_id") or f"anon {short(pid)}", href=f"/profiles/{pid}")
+
+
+def households_page(tenant_id: str, enabled: bool, can_toggle: bool):
+    by_class = fetchall("select d.device_class, count(*) as n, count(distinct d.profile_id) as people from device d "
+                        "join profile p on p.id=d.profile_id where d.tenant_id=? and p.merged_into is null "
+                        "and p.erased_at is null group by d.device_class order by n desc", [tenant_id])
+    shared = fetchall("select d.device_key, max(d.device_class) as device_class, max(d.os) as os, max(d.browser) as browser, "
+                      "max(d.key_kind) as key_kind, count(distinct d.profile_id) as n from device d "
+                      "join profile p on p.id=d.profile_id where d.tenant_id=? and p.merged_into is null "
+                      "and p.erased_at is null group by d.device_key having count(distinct d.profile_id) > 1 "
+                      "order by n desc limit 25", [tenant_id])
+    multi = (fetchone("select count(*) as n from (select profile_id from device where tenant_id=? "
+                      "group by profile_id having count(*) > 1) x", [tenant_id]) or {}).get("n") or 0
+    houses = fetchall("select * from household where tenant_id=? order by members desc, last_seen desc limit 100",
+                      [tenant_id])
+    toggle = Form(Input(type="hidden", name="enabled", value="0" if enabled else "1"),
+                  Button("Turn household grouping off" if enabled else "Turn household grouping on",
+                         cls="small outline" if enabled else "small"),
+                  method="post", action="/households/toggle", cls="inline",
+                  onsubmit=None if enabled else "return confirm('Start collecting hashed household IPs for "
+                                                "visitors with identity_resolution consent?')") if can_toggle else None
+    return page(
+        "Devices & households",
+        Div(kpi("Devices", sum(r["n"] for r in by_class)), kpi("Multi-device people", multi),
+            kpi("Shared devices", len(shared)), kpi("Households", len(houses)), cls="kpis"),
+        H3("Devices by type"),
+        Table(Thead(Tr(Th("Type"), Th("Devices"), Th("People"))),
+              Tbody(*[Tr(Td(device_label({"device_class": r["device_class"]})), Td(r["n"]), Td(r["people"]))
+                      for r in by_class])) if by_class else P(Em("No devices yet."), cls="muted"),
+        P("Each device is keyed by an explicit device id when an app or fi.js sends one (", Code("context.device.id"),
+          "), otherwise by a hashed browser fingerprint. Only the device type, OS and browser family are kept in clear.",
+          cls="muted"),
+        H3("Shared devices"),
+        P("One device used by several profiles — a family iPad, a reception desktop. Anonymous visitors on these "
+          "are never auto-merged into a known person.", cls="muted"),
+        Table(Thead(Tr(Th("Device"), Th("Identified by"), Th("Profiles"), Th("Who"))),
+              Tbody(*[Tr(Td(device_label(r)), Td(Code(r["key_kind"])), Td(r["n"]),
+                         Td(*[Span(_who(x["profile_id"]), " ") for x in fetchall(
+                             "select distinct profile_id from device where tenant_id=? and device_key=? limit 6",
+                             [tenant_id, r["device_key"]])]))
+                      for r in shared])) if shared else P(Em("None."), cls="muted"),
+        H3("Households"),
+        Div(pill("on", "ok") if enabled else pill("off"), " ", toggle, cls="row"),
+        P("Profiles that repeatedly share a home IP address (IPv4, or IPv6 /64) over the last 30 days. A household groups "
+          "different people; it never merges them. IPs shared by many profiles (offices, mobile carriers, VPNs) are "
+          "ignored. Only the keyed hash of the IP is stored, and it expires after 30 days.", cls="muted"),
+        (Table(Thead(Tr(Th("Household"), Th("People"), Th("Devices"), Th("Networks"), Th("Members"), Th("Last seen"))),
+               Tbody(*[Tr(Td(A(short(h["id"]), href=f"/households/{h['id']}")), Td(h["members"]), Td(h["devices"]),
+                          Td(h["networks"]),
+                          Td(*[Span(_who(m["profile_id"]), " ") for m in fetchall(
+                              "select profile_id from household_member where household_id=? limit 6", [h["id"]])]),
+                          Td(Small((h["last_seen"] or "")[:16])))
+                       for h in houses]))
+         if houses else P(Em("No households yet." if enabled else "Household grouping is off for this workspace."),
+                          cls="muted")),
+        active="households",
+    )
+
+
+def household_detail(tenant_id: str, hid: str):
+    h = fetchone("select * from household where id=? and tenant_id=?", [hid, tenant_id])
+    if not h:
+        return page("Not found", P("No such household (households are rebuilt on every worker run)."))
+    people = hh.members(hid)
+    return page(
+        f"Household {short(hid)}",
+        P(f"{h['members']} people · {h['devices']} devices · {h['networks']} home network(s) · seen ",
+          (h["first_seen"] or "")[:10], " → ", (h["last_seen"] or "")[:10], cls="muted"),
+        P("Members are separate people. Do not use household membership to reveal one member's activity to another "
+          "(e.g. health-related messages to a shared address).", cls="muted"),
+        *[Article(H4(_who(p["id"]), " ", pill(p["status"], "ok" if p["status"] == "known" else "")),
+                  Ul(*[Li(device_label(d), " ", Small(f"last seen {(d['last_seen'] or '')[:10]}", cls="muted"))
+                       for d in hh.devices_of(p["id"])]) or P(Em("No devices"), cls="muted"))
+          for p in people],
+        active="households",
     )
 
 
@@ -197,7 +305,7 @@ def candidates(tenant_id: str, status: str = "pending"):
             Thead(Tr(Th("Score"), Th("Left"), Th("Right"), Th("Evidence"), Th("Engine"), Th(""))),
             Tbody(*[Tr(
                 Td(B(f"{c['score']:.3f}")), Td(who(c["left_id"])), Td(who(c["right_id"])),
-                Td(*[Span(pill(k, "ok" if v["agree"] else "no"), " ") for k, v in loads(c["features_json"]).items()]),
+                Td(*[Span(pill("same household", "warn") if k == "household" else pill(k, "ok" if v["agree"] else "no"), " ") for k, v in loads(c["features_json"]).items()]),
                 Td(Small(c["engine"])),
                 Td(Form(Button("Merge", cls="small"), method="post", action=f"/candidates/{c['id']}/accept", cls="inline"), " ",
                    Form(Button("Reject", cls="small outline"), method="post", action=f"/candidates/{c['id']}/reject", cls="inline"))

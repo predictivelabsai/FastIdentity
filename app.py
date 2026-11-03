@@ -34,6 +34,7 @@ ROLE_RULES = [
     ("POST", r"^/candidates", "analyst"),
     ("POST", r"^/segments", "analyst"),
     ("POST", r"^/settings/workspace$", "owner"),
+    ("POST", r"^/households/toggle$", "owner"),
     ("*", r"^/settings/(members|invites|api-keys)", "admin"),
 ]
 # Objects addressed by id must belong to the current workspace.
@@ -43,6 +44,7 @@ OWNERSHIP = [
     (r"^/segments/([^/]+)", "segment"),
     (r"^/candidates/([^/]+)/(accept|reject)$", "match_candidate"),
     (r"^/flows/([^/]+)/toggle$", "flow"),
+    (r"^/households/(hh_[^/]+)$", "household"),
 ]
 
 
@@ -219,6 +221,8 @@ def post(sess):
     if scalar("select count(*) from profile where tenant_id=?", [T(sess)]):
         return settings_ui.workspace_page("Sample data can only be loaded into an empty workspace.")
     demo(T(sess))
+    from domain.households import rebuild
+    rebuild(T(sess), actor=ME(sess))
     matching.run_matching(T(sess), actor=ME(sess))
     audit(T(sess), ME(sess), "workspace.sample_data_loaded")
     return back("/")
@@ -404,7 +408,10 @@ def get(sess, status: str = "pending"):
 
 @rt("/candidates/run")
 def post(sess):
-    matching.run_matching(T(sess), actor=ME(sess))
+    from domain.households import rebuild
+    rebuild(T(sess), actor=ME(sess))
+    if matching.run_matching(T(sess), actor=ME(sess)).get("auto_merged"):
+        rebuild(T(sess), actor=ME(sess))
     return back("/candidates")
 
 
@@ -420,6 +427,31 @@ def get(sess):
 
 
 # --- activation ---------------------------------------------------------------------------
+
+@rt("/households")
+def get(sess):
+    from domain.households import enabled
+    return graph.households_page(T(sess), enabled(T(sess)), context.can("owner"))
+
+
+@rt("/households/toggle")
+def post(sess, enabled: str = "0"):
+    from domain import households
+    on = enabled == "1"
+    tenancy.update_workspace(T(sess), ME(sess), households_enabled=1 if on else 0)
+    if on:
+        households.rebuild(T(sess), actor=ME(sess))
+    else:
+        # Data minimisation: switching off drops the groups and the hashed home IPs.
+        households.clear(T(sess))
+        execute("delete from signal where tenant_id=? and signal_type='hh_ip'", [T(sess)])
+    return back("/households")
+
+
+@rt("/households/{hid}")
+def get(sess, hid: str):
+    return graph.household_detail(T(sess), hid)
+
 
 @rt("/segments")
 def get(sess):

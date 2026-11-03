@@ -120,9 +120,13 @@ def process(source: dict, msg: dict, ip: str | None = None) -> dict:
     origin = ident["origin_profile_id"] if ident else profile_id
 
     if cmp_purposes.get("identity_resolution") or has_purpose(profile_id, "identity_resolution"):
-        sig = signals_mod.extract(context, ip)
+        hh_on = bool((fetchone("select households_enabled from tenant where id=?", [tenant_id]) or {})
+                     .get("households_enabled"))
+        sig = signals_mod.extract(context, ip, signals_mod.explicit_device_id(context, msg), households=hh_on)
         if sig:
-            signals_mod.record(tenant_id, profile_id, origin, sig)
+            seen = signals_mod.seen_at(msg.get("timestamp"))
+            signals_mod.record(tenant_id, profile_id, origin, sig, seen)
+            signals_mod.record_device(tenant_id, profile_id, origin, context, sig, seen)
 
     if mtype == "consent":
         return {"ok": True, "accepted": True, "profile_id": profile_id}

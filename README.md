@@ -29,6 +29,7 @@ The **[platform guide](docs/fastidentity_platform_guide.md)** ([PDF](docs/fastid
   - [Consent purposes](#consent-purposes)
   - [Resolution rules](#resolution-rules)
   - [Probabilistic matching](#probabilistic-matching)
+  - [Devices and households](#devices-and-households)
   - [Activation](#activation)
 - [Workspaces, members and API keys](#workspaces-members-and-api-keys)
 - [Installing on a website](#installing-on-a-website)
@@ -154,19 +155,22 @@ Signals are derived from the request context, and only when `identity_resolution
 
 | Signal | Source |
 |---|---|
-| `device` | user agent + screen + timezone + language + platform |
+| `device` | user agent + screen + timezone + language + platform (fingerprint) |
+| `device_id` | explicit device id: `context.device.id` from an app SDK or fi.js's first-party id |
 | `net` | IPv4 /24 or IPv6 /48 prefix (private and loopback addresses are ignored) |
+| `hh_ip` | full IPv4 or IPv6 /64, **households only**, collected only when the workspace turns households on |
 | `ua_family` | e.g. Safari/Mac OS X |
 | `tz` | time zone |
 | `lang` | primary language |
 
 Matching steps:
 
-1. **Blocking.** Only pairs that share a `device` or `net` hash are compared.
+1. **Blocking.** Only pairs that share a `device`, `device_id` or `net` hash are compared. `hh_ip` is never evidence that two profiles are the same person.
 2. **Scoring.** Each comparison has `(m, u)` probabilities, and the Bayes factors are combined with a prior of 0.001. Comparisons with missing data count as neutral.
 
    | Comparison | m | u |
    |---|---|---|
+   | device_id (replaces `device` when both sides have one) | 0.95 | 0.0001 |
    | device | 0.90 | 0.0005 |
    | net | 0.70 | 0.01 |
    | ua_family | 0.95 | 0.30 |
@@ -189,6 +193,27 @@ Matching steps:
    Use it to tune the thresholds.
 
 Set `MATCH_ENGINE=splink` and run `pip install -r requirements-splink.txt` to score with Splink (DuckDB backend, EM-trained). Blocking and policy stay the same. Below about 50 profiles, matching falls back to the built-in scorer.
+
+### Devices and households
+
+**Devices.** Every profile has a list of the devices it has used, with first and last seen, hit count, and whether another profile uses the same device.
+
+- A device is keyed by an explicit device id when one is sent, otherwise by the fingerprint hash. When an explicit id first arrives for a device previously known only by fingerprint, the two records are folded together.
+- Only coarse descriptors are kept in clear: class (desktop, mobile, tablet, tv, bot), OS family and browser family.
+- fi.js keeps a first-party device id in `localStorage` (`_fi_did`) while marketing consent is granted. It survives `fastidentity.reset()` (logout), so a shared device is recognised, and it is deleted when consent is withdrawn.
+- Mobile apps send the vendor-scoped id (`identifierForVendor` on iOS, app-set id on Android) as `context.device.id` through the backend. Advertising ids (IDFA, GAID) are deliberately ignored; all-zero ids are rejected.
+- A shared device (a family iPad) is shown as such. An anonymous visitor on it matches several known people, so the ambiguity guard sends it to review instead of auto-merging.
+
+**Households.** Households are opt-in per workspace: an owner turns them on under *Devices & households*. While they are on, the full home IP is hashed as `hh_ip` for visitors with `identity_resolution` consent. The worker groups profiles as follows:
+
+- Only IPs seen in the last `HOUSEHOLD_WINDOW_DAYS` (30) count, and an IP must be seen on at least `HOUSEHOLD_MIN_DAYS` (2) different days.
+- An IP shared by more than `HOUSEHOLD_MAX_MEMBERS` (6) profiles is treated as an office, mobile carrier (CGNAT), café or VPN and ignored.
+- Profiles linked through several qualifying IPs (the router got a new address) form one household.
+- A household groups **different people** and never merges them. Merge candidates inside one household carry a *same household* flag for reviewers.
+
+Groups are rebuilt on every worker pass, so withdrawn consent, erasure and expiry take effect on the next pass. Turning households off deletes the groups and every `hh_ip` hash. A data subject export lists the person's devices and household id, never the other members. `hh_ip` hashes older than the window are deleted by retention.
+
+Segments can use `{"type": "device", "value": "mobile"}` and `{"type": "household", "min": 2}`. Do not use households to send one member's health-related activity to another member's address.
 
 ### Activation
 
@@ -355,8 +380,9 @@ Message shape (all fields optional except an identifier):
 | Page | Purpose |
 |---|---|
 | Dashboard | Profiles, known rate, email-contactable count, events, consent drops, pending merges, messages, recent activity |
-| Profiles | Search and filter. The detail page shows identifiers, hashed-signal summary, consent (record or withdraw), interests, traits, timeline, messages and merge history with **Unmerge**, plus **Export**, **Erase** and **Sync to destination** |
+| Profiles | Search and filter. The detail page shows identifiers, hashed-signal summary, devices and household, consent (record or withdraw), interests, traits, timeline, messages and merge history with **Unmerge**, plus **Export**, **Erase** and **Sync to destination** |
 | Events | Event stream with per-event-name filter |
+| Devices & households | Devices by type, multi-device people, shared devices, households (owner turns them on or off) and household detail |
 | Merge candidates | Review queue with per-comparison evidence; **Merge** or **Reject**; **Run matching now** |
 | Match quality | Precision, auto-merge and undo rates, score buckets |
 | Segments | Rule builder and member lists |
@@ -397,6 +423,7 @@ All settings come from environment variables (`.env` is loaded automatically). S
 | `EVENT_RETENTION_DAYS` | `395` | Events older than this are deleted. |
 | `ANON_PROFILE_RETENTION_DAYS` | `90` | Anonymous profiles inactive this long are deleted. |
 | `MATCH_ENGINE` | `builtin` | `builtin` or `splink`. |
+| `HOUSEHOLD_WINDOW_DAYS` / `HOUSEHOLD_MIN_DAYS` / `HOUSEHOLD_MAX_MEMBERS` | `30` / `2` / `6` | Household grouping, see [Devices and households](#devices-and-households). |
 | `AUTO_MERGE_THRESHOLD` / `REVIEW_THRESHOLD` | `0.97` / `0.70` | |
 | `INTEREST_KEYS` | `treatment,hospital,category,product` | Event property keys folded into profile interests. |
 | `DEFAULT_FREQUENCY_CAP` / `DEFAULT_FREQUENCY_WINDOW_DAYS` | `2` / `7` | |

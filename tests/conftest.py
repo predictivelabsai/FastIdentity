@@ -17,7 +17,7 @@ from db import execute  # noqa: E402
 from seed import bootstrap  # noqa: E402
 
 TABLES = ["profile", "identity", "signal", "event", "merge_log", "match_candidate", "consent_record",
-          "suppression", "audit_log", "consent_drop", "message"]
+          "suppression", "audit_log", "consent_drop", "message", "device", "household_member", "household"]
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +32,7 @@ def clean():
     execute("delete from tenant where id != 'demo'")
     execute("delete from staff_user where email != 'admin@fastsme.com'")
     execute("update staff_user set tenant_id='demo', last_tenant_id=null")
+    execute("update tenant set households_enabled=0")
     bootstrap()
     yield
 

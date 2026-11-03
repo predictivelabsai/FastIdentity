@@ -103,3 +103,8 @@ BRAZE_API_KEY = os.getenv("BRAZE_API_KEY", "")
 BRAZE_REST_ENDPOINT = os.getenv("BRAZE_REST_ENDPOINT", "https://rest.fra-02.braze.eu")
 WEBHOOK_DEFAULT_URL = os.getenv("WEBHOOK_DEFAULT_URL", "")
 WEBHOOK_SIGNING_SECRET = os.getenv("WEBHOOK_SIGNING_SECRET", "")
+
+# Devices & households
+HOUSEHOLD_WINDOW_DAYS = _int("HOUSEHOLD_WINDOW_DAYS", 30)     # residential IPs rotate; older links expire
+HOUSEHOLD_MAX_MEMBERS = _int("HOUSEHOLD_MAX_MEMBERS", 6)      # more people on one IP = office / CGNAT / café
+HOUSEHOLD_MIN_DAYS = _int("HOUSEHOLD_MIN_DAYS", 2)            # an IP must be seen on 2+ days to count as home
