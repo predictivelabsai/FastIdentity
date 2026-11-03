@@ -4,6 +4,10 @@
 
 FastIdentity turns high-intent sessions on your site into known, consented contacts you can message. Examples of high intent are viewing a treatment, starting a booking or abandoning a cart. It is built to stay inside UK GDPR, EU GDPR and PECR. It is part of the [FastSME](https://fastsme.com) stack (FastHTML + HTMX, SQLite or Postgres) and is deployed at `identity.fastsme.com`.
 
+![FastIdentity walkthrough](docs/demo/fastidentity-walkthrough.gif)
+
+The **[platform guide](docs/fastidentity_platform_guide.md)** ([PDF](docs/fastidentity_platform_guide.pdf)) covers the executive summary, comparables, every admin screen and the MyMedicalGateway integration. Rebuild it with `python scripts/capture_guide_screenshots.py && bash scripts/build_platform_guide.sh`.
+
 ```
  visitor browses ──▶ consent banner ──▶ fi.js collects (only after consent)
                                          │
