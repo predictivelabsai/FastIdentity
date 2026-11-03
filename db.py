@@ -1,7 +1,7 @@
 """Data layer for FastIdentity.
 
-Dual-mode like FastCDP/FastERP: raw SQLite by default, shared PostgreSQL (per-app
-schema) when ``FASTIDENTITY_DATABASE_URL`` / ``DB_URL`` is set. Domain and UI code
+Dual-mode like FastCDP/FastERP, selected by ``DB_SOURCE``: ``sqlite`` (default,
+local file) or ``psql`` (shared PostgreSQL, per-app schema ``DB_SCHEMA``). Domain and UI code
 only use the helpers below, written with SQLite ``?`` placeholders; ``_pg_sql``
 rewrites them for psycopg. All primary keys are prefixed text ids (``p_…``,
 ``e_…``) so both backends behave identically. Tables are created at import.
@@ -12,9 +12,9 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from settings import DATABASE_PATH, DATABASE_URL, DB_SCHEMA
+from settings import DATABASE_PATH, DATABASE_URL, DB_SCHEMA, DB_SOURCE
 
-USE_POSTGRES = bool(DATABASE_URL)
+USE_POSTGRES = DB_SOURCE == "psql"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenant (
@@ -243,6 +243,9 @@ def _get_pool():
                 "application_name": "fastidentity",
             },
         )
+        import atexit
+
+        atexit.register(close_pool)
     return _pool
 
 
@@ -255,6 +258,7 @@ def _sqlite_conn():
     conn = sqlite3.connect(DATABASE_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
     try:
         yield conn
         conn.commit()

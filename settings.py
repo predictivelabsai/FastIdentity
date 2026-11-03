@@ -40,10 +40,19 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
 
 # --- data layer ----------------------------------------------------------------
-# SQLite by default; set FASTIDENTITY_DATABASE_URL (or shared DB_URL) for Postgres.
+# DB_SOURCE picks the backend explicitly: "sqlite" (default, local file) or "psql".
+DB_SOURCE = os.getenv("DB_SOURCE", "sqlite").strip().lower()
+if DB_SOURCE in ("postgres", "postgresql", "pg"):
+    DB_SOURCE = "psql"
+if DB_SOURCE not in ("sqlite", "psql"):
+    raise RuntimeError(f"DB_SOURCE must be 'sqlite' or 'psql', got {DB_SOURCE!r}")
 DATABASE_PATH = os.getenv("DATABASE_PATH", str(DATA_DIR / "fastidentity.db"))
-DATABASE_URL = (os.getenv("FASTIDENTITY_DATABASE_URL") or os.getenv("DB_URL") or "").strip()
-DB_SCHEMA = os.getenv("FASTIDENTITY_DB_SCHEMA", "fastidentity")
+# Postgres DSN: app-specific name first, then the family-wide names.
+DATABASE_URL = (os.getenv("FASTIDENTITY_DATABASE_URL") or os.getenv("DATABASE_URL")
+                or os.getenv("DB_URL") or "").strip().strip("'\"")
+DB_SCHEMA = os.getenv("DB_SCHEMA") or os.getenv("FASTIDENTITY_DB_SCHEMA") or "fast_identity"
+if DB_SOURCE == "psql" and not DATABASE_URL:
+    raise RuntimeError("DB_SOURCE=psql but no DATABASE_URL / FASTIDENTITY_DATABASE_URL is set")
 
 # --- privacy / compliance ----------------------------------------------------------
 # HMAC key used to hash device + network signals. Never store raw fingerprints.

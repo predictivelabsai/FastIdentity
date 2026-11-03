@@ -5,7 +5,7 @@ from pathlib import Path
 # Must run before any app module imports settings/db.
 _tmp = Path(tempfile.mkdtemp()) / "test.db"
 os.environ.update({
-    "FASTIDENTITY_DATABASE_URL": "", "DB_URL": "", "DATABASE_PATH": str(_tmp),
+    "DB_SOURCE": "sqlite", "DATABASE_PATH": str(_tmp),
     "SECRET_KEY": "test", "IDENTITY_HASH_SECRET": "test-secret", "DEFAULT_TENANT": "demo",
     "ADMIN_EMAIL": "admin@fastsme.com", "ADMIN_PASSWORD": "admin", "ADMIN_API_TOKEN": "tok",
     "REQUIRE_ANALYTICS_CONSENT": "true", "ALLOWED_ORIGINS": "*",

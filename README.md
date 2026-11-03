@@ -347,9 +347,10 @@ All settings come from environment variables (`.env` is loaded automatically). S
 | `ADMIN_API_TOKEN` | *(empty: API disabled)* | Bearer token for `/v1/erasure` and `/v1/export`. |
 | `PUBLIC_BASE_URL` | `http://localhost:5023` | Used in snippets and docs pages. |
 | `ALLOWED_ORIGINS` | `*` | Fallback CORS allow-list when a source has none. |
-| `FASTIDENTITY_DATABASE_URL` (or `DB_URL`) | *(empty: SQLite)* | Postgres DSN. |
-| `FASTIDENTITY_DB_SCHEMA` | `fastidentity` | Postgres schema, created automatically. |
-| `DATABASE_PATH` | `data/fastidentity.db` | SQLite file. |
+| `DB_SOURCE` | `sqlite` | Backend switch: `sqlite` or `psql`. |
+| `DATABASE_URL` (or `FASTIDENTITY_DATABASE_URL`, `DB_URL`) | *(empty)* | Postgres DSN, required when `DB_SOURCE=psql`. |
+| `DB_SCHEMA` (or `FASTIDENTITY_DB_SCHEMA`) | `fast_identity` | Postgres schema; created on start if missing. |
+| `DATABASE_PATH` | `data/fastidentity.db` | SQLite file (`DB_SOURCE=sqlite`). |
 | `DEFAULT_TENANT` | `demo` | Single-tenant v1. |
 | `FASTIDENTITY_PORT` | `5023` | |
 | `DATA_REGION` | `uk` | Displayed. Enforce it by where you deploy the app and database. |
@@ -365,12 +366,10 @@ All settings come from environment variables (`.env` is loaded automatically). S
 
 ## Running in production
 
-- **Processes.** You need two:
-  - the web app: `python app.py`
-  - the worker: `python -m workers.run`, or `python -m workers.run --once` from cron
-
-  `docker-compose.yml` shows both.
-- **Database.** Use Postgres (`FASTIDENTITY_DATABASE_URL`). Tables and indexes are created on start and the schema is idempotent. SQLite is fine for demos and single-site pilots.
+- **Processes.** The web app (`python app.py`) and the worker (`python -m workers.run`). The Docker image runs both via `scripts/start.sh`. Set `RUN_WORKER=0` when the worker runs as its own service, as `docker-compose.yml` does.
+- **Coolify.** The service is registered in FastDevOps (`config/services.yaml`, key `fastidentity`) at `https://identity.fastsme.com`, with the A record `identity` → `191.218.164.166`.
+- **CI/CD.** A push to `main` triggers a GitHub webhook (push events only), which calls Coolify's manual webhook endpoint (`https://coolify.fastsme.com/webhooks/source/github/events/manual`). Coolify then builds the Dockerfile, waits for `/health` to pass, and swaps traffic over. For manual operations, run `python scripts/coolify.py status|env --sync --yes|deploy --yes` with FastDevOps checked out beside this repo (see `.env.coolify.sample`).
+- **Database.** Use Postgres (`DB_SOURCE=psql` + `DATABASE_URL`). The FastSME shared server hosts it in schema `fast_identity`. Tables and indexes are created on start and the schema is idempotent. SQLite is fine for demos and single-site pilots.
 - **Hosting region.** Deploy the app and database in the UK or EU to match `DATA_REGION`. Check your ESP's region too; see the ESP guide.
 - **Domain.** `identity.fastsme.com` for the admin UI and API. Use a per-client first-party CNAME for collection.
 - **Secrets.** Generate `SECRET_KEY`, `IDENTITY_HASH_SECRET` and `ADMIN_API_TOKEN` with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Change `ADMIN_PASSWORD`. Restrict `ALLOWED_ORIGINS` or per-source origins.
@@ -410,7 +409,7 @@ docs/esp_integration.md how to connect an ESP
 .venv/bin/python -m pytest -q
 ```
 
-Tests run against a temporary SQLite database and never touch the database in `.env`. They cover:
+Tests force `DB_SOURCE=sqlite` with a temporary file and never touch the database in `.env`. They cover:
 
 - deterministic merge and unmerge
 - phone normalisation and idempotency
