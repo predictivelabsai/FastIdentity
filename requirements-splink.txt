@@ -1,0 +1,5 @@
+# Optional: Splink-backed probabilistic matching (MATCH_ENGINE=splink).
+# The built-in Fellegi-Sunter scorer works without these.
+splink>=4.0,<5
+duckdb>=1.0
+pandas>=2.0

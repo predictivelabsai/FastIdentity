@@ -1,0 +1,25 @@
+# Local/dev stack: app + worker + Postgres. Secrets come from .env (compose auto-loads it).
+services:
+  app:
+    build: .
+    ports: ["5023:5023"]
+    env_file: .env
+    environment:
+      FASTIDENTITY_DATABASE_URL: postgresql://fastidentity:fastidentity@db:5432/fastidentity
+    depends_on: [db]
+  worker:
+    build: .
+    command: ["python", "-m", "workers.run"]
+    env_file: .env
+    environment:
+      FASTIDENTITY_DATABASE_URL: postgresql://fastidentity:fastidentity@db:5432/fastidentity
+    depends_on: [db, app]
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fastidentity
+      POSTGRES_PASSWORD: fastidentity
+      POSTGRES_DB: fastidentity
+    volumes: [pgdata:/var/lib/postgresql/data]
+volumes:
+  pgdata:
