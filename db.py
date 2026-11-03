@@ -309,15 +309,20 @@ def update_row(table: str, pk, **updates):
 
 
 def init_db():
-    if USE_POSTGRES:
-        with _get_pool().connection() as conn:
-            conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{DB_SCHEMA}"')
     # Strip SQL comment lines first (they may contain ';'), then split statements.
     sql = "\n".join(l for l in SCHEMA.splitlines() if not l.strip().startswith("--"))
-    for stmt in sql.split(";"):
-        if stmt.strip():
-            execute(stmt.strip())
-    for stmt in _INDEXES:
+    statements = [s.strip() for s in sql.split(";") if s.strip()] + list(_INDEXES)
+    if USE_POSTGRES:
+        # The web app and the worker start together; concurrent CREATE ... IF NOT
+        # EXISTS races in Postgres (pg_type unique violation). Serialise the DDL
+        # under a transaction-scoped advisory lock on one connection.
+        with _get_pool().connection() as conn, conn.transaction():
+            conn.execute("select pg_advisory_xact_lock(hashtext(%s))", [f"fastidentity:{DB_SCHEMA}"])
+            conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{DB_SCHEMA}"')
+            for stmt in statements:
+                conn.execute(_pg_sql(stmt))
+        return
+    for stmt in statements:
         execute(stmt)
 
 
