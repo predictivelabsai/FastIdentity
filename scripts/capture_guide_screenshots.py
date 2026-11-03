@@ -46,6 +46,9 @@ SHOTS = [
     ("11-privacy.png", "Compliance — privacy requests", "/privacy"),
     ("12-audit.png", "Compliance — audit log", "/audit"),
     ("13-sources.png", "Setup — sources & pixel", "/sources"),
+    ("14-households.png", "Identity graph — devices & households", "/households"),
+    ("15-household.png", "Identity graph — one household", "/households/{household}"),
+    ("16-api-keys.png", "Setup — workspaces, members & API keys", "/settings/api-keys"),
 ]
 
 
@@ -57,6 +60,14 @@ def busiest_profile() -> str:
         "select p.id, count(e.id) n from profile p join event e on e.profile_id=p.id "
         "where p.status='known' and p.merged_into is null group by p.id order by n desc limit 1"
     )
+    return row["id"] if row else ""
+
+
+def biggest_household() -> str:
+    sys.path.insert(0, str(ROOT))
+    import db  # noqa: PLC0415
+
+    row = db.fetchone("select id from household order by members desc, devices desc limit 1")
     return row["id"] if row else ""
 
 
@@ -72,6 +83,7 @@ def capture(base: str, out_dir: Path, only: set[str] | None) -> list[tuple[str, 
     email = os.getenv("ADMIN_EMAIL", "admin@fastsme.com")
     password = os.getenv("ADMIN_PASSWORD", "admin")
     profile = os.getenv("DEMO_PROFILE_ID") or busiest_profile()
+    household = os.getenv("DEMO_HOUSEHOLD_ID") or biggest_household()
     out_dir.mkdir(parents=True, exist_ok=True)
     done: list[tuple[str, Path]] = []
     with sync_playwright() as p:
@@ -90,7 +102,7 @@ def capture(base: str, out_dir: Path, only: set[str] | None) -> list[tuple[str, 
             if only and fname not in only:
                 continue
             try:
-                page.goto(base + route.format(profile=profile))
+                page.goto(base + route.format(profile=profile, household=household))
                 settle(page)
                 page.screenshot(path=out_dir / fname)
                 done.append((caption, out_dir / fname))

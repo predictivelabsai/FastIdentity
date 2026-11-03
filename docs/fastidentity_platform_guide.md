@@ -22,9 +22,10 @@ Pixel · Identity graph · Abandonment flows · GDPR / PECR compliance
 
 - **Deterministic first.** Email, phone, user ID and CRM ID merge profiles with certainty, and every merge can be undone.
 - **Probabilistic second, and only with consent.** A Fellegi–Sunter model scores device and network signals, which are stored as keyed hashes and never as raw fingerprints. Matches above 97% merge automatically; matches between 70% and 97% go to a human review queue. An ambiguity guard never auto-merges an anonymous visitor who resembles two known people.
+- **Devices and households.** Each person's devices are listed: desktop, phone, tablet or app, identified by an explicit device ID when available and by a fingerprint otherwise. Shared devices are detected. Households are opt-in: profiles that repeatedly share a home IP are grouped, never merged.
 - **Compliance built in.** It keeps a consent ledger per purpose and legal basis, maps CookieYes, OneTrust and Google Consent Mode v2 consent automatically, and handles PECR soft opt-in. Suppression is hashed, every action is audit-logged, and right-to-erasure and data-export (DSAR) requests are served through an API.
 
-**Where we are.** The platform is live at `identity.fastsme.com` on the FastSME Coolify stack: UK data region, PostgreSQL, CI/CD on every push to `main`, and 30 automated tests. The first customer integration is **MyMedicalGateway**; see Section 8.
+**Where we are.** The platform is live at `identity.fastsme.com` on the FastSME Coolify stack: UK data region, PostgreSQL, CI/CD on every push to `main`, and 56 automated tests. It runs as multi-tenant SaaS: each customer gets a workspace with its own members, roles and secret API keys. The first customer integration is **MyMedicalGateway**; see Section 8.
 
 ---
 
@@ -35,10 +36,10 @@ Pixel · Identity graph · Abandonment flows · GDPR / PECR compliance
 2. Contents
 3. Comparables — B2C identity resolution in the EEA
 4. Overview — dashboard
-5. Identity graph — profiles, events, merge candidates, match quality
+5. Identity graph — profiles, events, devices & households, merge candidates, match quality
 6. Activation — segments, flows, destinations
 7. Compliance — consent, privacy requests, audit log
-8. Setup — sources & pixel, MyMedicalGateway integration
+8. Setup — sources & pixel, workspaces & API keys, MyMedicalGateway integration
 9. Operating playbook
 :::
 
@@ -132,7 +133,8 @@ Anonymous profiles that never become known are deleted automatically after 90 da
 One page shows a single person.
 
 - **Identifiers**: every anonymous ID, email, phone and user ID linked to the person, with first-seen dates.
-- **Hashed signals**: device, /24 network, browser family, timezone and language. These are stored only as keyed hashes, and only with `identity_resolution` consent.
+- **Hashed signals**: device, device ID, /24 network, browser family, timezone and language. These are stored only as keyed hashes, and only with `identity_resolution` consent.
+- **Devices**: each device the person used (type, OS, browser), whether it was identified by device ID or fingerprint, and whether **another profile shares it**. The person's household, if any, is linked here.
 - **Consent**: the current state of each purpose, with its source and legal basis. Staff can record an opt-in or a withdrawal here.
 - **Interests**: treatments and hospitals viewed, counted from events.
 - **Actions**: export (DSAR), sync to a destination, or **erase** (right to erasure).
@@ -161,16 +163,57 @@ PII keys (`email`, `phone`, `name`, …) are stripped from event properties befo
 
 ---
 
+## 5. Identity graph — devices & households
+
+:::: split
+::: txt
+**Devices.** Every event with `identity_resolution` consent is tied to a device.
+
+- An **explicit device ID** is used when one is available: the mobile app's vendor ID sent through the backend, or fi.js's first-party ID, which survives logout. Otherwise the device is identified by a hashed **fingerprint**.
+- Only the device type, OS and browser family are kept in plain text. Advertising IDs (IDFA, GAID) are ignored.
+- **Shared devices**, such as a family iPad or a reception PC, are listed. An anonymous visitor on one is never merged automatically.
+
+**Households** are opt-in per workspace, switched on by the owner. Profiles are grouped when they share a home IP on at least two days within 30 days. IPs with more than six profiles (offices, mobile carriers, VPNs) are ignored. Switching households off deletes the groups and the hashed IPs.
+:::
+::: shot
+![Devices & households](img/14-households.png)
+:::
+::::
+
+---
+
+## 5. Identity graph — one household
+
+:::: split
+::: txt
+A household groups **different people**; it never merges them. This one has two partners and a shared tablet; the third member is an anonymous visit still waiting in the review queue.
+
+**Used for**
+
+- Explaining merge candidates: "same household" usually means two people, not one.
+- Audiences: `household` (min. members) and `device` (mobile, tablet, desktop) segment rules.
+- Insight: how many patients research on several devices, and who decides together.
+
+**Not used for** revealing one member's activity to another. A data export lists only the person's own devices and household ID, never the other members. For health sites, leave households off unless a DPIA covers them.
+:::
+::: shot
+![One household](img/15-household.png)
+:::
+::::
+
+---
+
 ## 5. Identity graph — merge candidates
 
 :::: split
 ::: txt
-The **probabilistic matcher** runs every minute. It compares profiles that share a blocking key (device or network hash), then scores each pair with Fellegi–Sunter weights.
+The **probabilistic matcher** runs every minute. It compares profiles that share a blocking key (device, device ID or network hash), then scores each pair with Fellegi–Sunter weights.
 
 - **≥ 0.97** merges automatically, but only when every profile involved has `identity_resolution` consent.
 - **0.70 – 0.97** goes into this review queue, where staff accept or reject.
 - **Ambiguous**: an anonymous visitor who resembles more than one known person is never auto-merged; shared family devices are the usual cause.
 - Two *known* people are never merged automatically.
+- A **same household** flag marks pairs who live together. These are often two people on one family tablet, not one person.
 :::
 ::: shot
 ![Merge candidates](img/05-candidates.png)
@@ -204,6 +247,8 @@ At larger scale, set `MATCH_ENGINE=splink` to fit the m/u parameters with EM on 
 :::: split
 ::: txt
 **Segments** are saved audiences, defined as rules over traits, interests and recent events. For example: *viewed a knee-replacement package in the last 14 days, known, email-contactable*.
+
+Rules can also use the **device type** a person used (e.g. *mobile only*) and **household** membership.
 
 Segments feed flows and can be synced to a destination as a list. Membership is evaluated when a flow or sync runs, so segments never go stale.
 :::
@@ -320,10 +365,29 @@ The **snippet** goes in `<head>` after the CMP script:
   data-write-key="WK_…" defer></script>
 ```
 
-The pixel reads CookieYes, OneTrust or Consent Mode state. It sets its `_fi_aid` cookie only after analytics consent, and it sends device signals only with marketing consent.
+The pixel reads CookieYes, OneTrust or Consent Mode state. It sets its `_fi_aid` cookie only after analytics consent, and it sends device signals, including its first-party device ID (`_fi_did`), only with marketing consent. The device ID survives `fi.reset()` at logout, so a shared device is recognised, and it is deleted when consent is withdrawn.
 :::
 ::: shot
 ![Sources & pixel](img/13-sources.png)
+:::
+::::
+
+---
+
+## 8. Setup — workspaces, members & API keys
+
+:::: split
+::: txt
+FastIdentity is **multi-tenant**. Each customer is a **workspace** with its own identity graph, consent ledger, sources and team. The same email in two workspaces is two different people.
+
+- **Sign-up**: *Continue with Google* creates a workspace; you become its owner. Colleagues on the workspace's email domain join automatically.
+- **Roles**: viewer, analyst (reviews merges, builds segments), admin (keys, members, exports, erasure) and owner (workspace settings, households).
+- **Invites**: by email; the link is shown once.
+- **Secret API keys** (`fi_sk_…`) authenticate a customer's backend. Each key is scoped to *ingest* and/or *privacy* (erasure and export), shown **once**, stored only as a hash, and revocable, with last-used time recorded.
+- **Platform admins** (FastSME staff) can open any workspace. Each visit is audit-logged.
+:::
+::: shot
+![API keys](img/16-api-keys.png)
 :::
 ::::
 
@@ -357,13 +421,13 @@ The pixel reads CookieYes, OneTrust or Consent Mode state. It sets its `_fi_aid`
 
 1. **Pixel** (`mmg/templates/base.html`): add `fi.js` after the CookieYes and GTM snippets. The write key comes from `FASTIDENTITY_WRITE_KEY` through the `inject_now` context processor (`mmg/__init__.py`).
 2. **Page context**: on treatment and hospital pages, call `fi.track("treatment_viewed", {treatment, hospital, country})`. The package page `/hospitals/<country>/<hospital>/<treatment>/` is the main abandonment trigger; its `…/start` POST counts as `quote_started`.
-3. **Identify (server)**: call `/v1/identify` from the `user_registered` signal, after login (`/post-registration-handler`, Google OAuth), and on `register_interest`. Use `str(user.id)` as `userId`, not `fs_uniquifier`, because Flask-Security rotates that value. Send the `receive_email/sms` flags as consent with basis `consent`.
+3. **Identify (server)**: call `/v1/identify` from the `user_registered` signal, after login (`/post-registration-handler`, Google OAuth), and on `register_interest`. Use `str(user.id)` as `userId`, not `fs_uniquifier`, because Flask-Security rotates that value. Send the `receive_email/sms` flags as consent with basis `consent`. From the mobile app, forward the vendor device ID as `context.device.id` (never the advertising ID).
 4. **Conversion events (server)**: `enquiry_submitted`, `quote_created` (`/treatments/terms`), `booking_submitted` (`/book/submit`), `deposit_paid` (from the payment webhook). These are the flows' *exit* events.
 5. **Logout**: call `fi.reset()` on the logged-out page.
 6. **Consent capture**: add an explicit, unticked marketing-email opt-in to the patient enquiry and registration forms. Today these flags can only be edited in the provider app.
 7. **Erasure and export**: add a patient account-deletion route to `user_bp`. It should call `/v1/erasure` and `/v1/export`; MMG has no such route today.
 8. **Activation**: create a webhook destination pointing at `/integrations/fastidentity/webhook`. MMG verifies the HMAC and sends through Postmark's **broadcast** message stream, not the transactional one.
-9. **Config**: add `FASTIDENTITY_URL`, `FASTIDENTITY_WRITE_KEY`, `FASTIDENTITY_SERVER_KEY`, `FASTIDENTITY_ADMIN_TOKEN` and `FASTIDENTITY_WEBHOOK_SECRET` to `.envs.example/*/patient.env`. Mark them skippable in `config/settings/base.py` so local development works without them.
+9. **Config**: add `FASTIDENTITY_URL`, `FASTIDENTITY_WRITE_KEY` (the publishable pixel key), `FASTIDENTITY_SECRET_KEY` and `FASTIDENTITY_WEBHOOK_SECRET` to `.envs.example/*/patient.env`. The secret key comes from *Settings → API keys* in the `mymedicalgateway` workspace with ingest and privacy scopes; it is shown once. Mark them skippable in `config/settings/base.py` so local development works without them.
 
 ---
 
@@ -374,6 +438,7 @@ The pixel reads CookieYes, OneTrust or Consent Mode state. It sets its `_fi_aid`
 - **Explicit consent** for treatment-specific marketing. Abandonment emails go only to people with `marketing_email` consent captured on a form, never under the soft opt-in.
 - Email copy refers to the *destination or hospital*, never to the *diagnosis*. Subject lines must never reveal the treatment.
 - A **DPIA** is completed before go-live, and FastIdentity is added to MMG's record of processing activities and privacy notice as a processor.
+- **Households stay off** in the MMG workspace. A shared home IP must never route one patient's treatment interest to a partner or parent. Device-level linking is fine under `identity_resolution` consent.
 - Data stays in the UK region (`DATA_REGION=uk`). The ESP receives the minimum: an email address and a flow ID.
 
 **Go-live checklist.**
@@ -383,7 +448,7 @@ The pixel reads CookieYes, OneTrust or Consent Mode state. It sets its `_fi_aid`
 - ☐ Webhook destination tested in dry-run, then a staff-only segment
 - ☐ Erasure round-trip tested (MMG deletion → FastIdentity tombstone → suppression)
 - ☐ DPIA signed off; privacy notice updated
-- ☐ Production write keys rotated and stored in MMG's secret store
+- ☐ Production secret key created in the MMG workspace and stored in MMG's secret store; staff keys revoked
 
 Tracking issue: [mymedicalgateway/mmg#1420](https://github.com/mymedicalgateway/mmg/issues/1420) (milestone: 4 November 2026).
 
@@ -399,6 +464,7 @@ Tracking issue: [mymedicalgateway/mmg#1420](https://github.com/mymedicalgateway/
 **Weekly.**
 
 - Match quality: if the reviewer acceptance rate on 0.9+ candidates is above 95%, consider lowering the review threshold; if it is below 80%, raise `AUTO_MERGE_THRESHOLD`.
+- Devices & households: watch the shared-device list. A device shared by many profiles is usually a kiosk or reception PC; check that its candidates are being rejected.
 - Flows: check messages sent against messages skipped. A high "no_consent" count means the opt-in on forms needs work.
 
 **Monthly.**
