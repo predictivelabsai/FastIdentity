@@ -385,7 +385,7 @@ The pixel reads CookieYes, OneTrust or Consent Mode state. It sets its `_fi_aid`
 - ☐ DPIA signed off; privacy notice updated
 - ☐ Production write keys rotated and stored in MMG's secret store
 
-Tracking issue: the `mymedicalgateway/mmg` GitHub issue "FastIdentity integration", in the 4 November 2026 milestone.
+Tracking issue: [mymedicalgateway/mmg#1420](https://github.com/mymedicalgateway/mmg/issues/1420) (milestone: 4 November 2026).
 
 ---
 
