@@ -1,0 +1,4 @@
+# Optional: scikit-learn look-alike propensity model (LOOKALIKE_ENGINE=sklearn).
+# Without these, domain.lookalike falls back to a dependency-free cosine-similarity
+# scorer (LOOKALIKE_ENGINE=builtin), so the feature degrades rather than breaks.
+scikit-learn>=1.4

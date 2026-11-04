@@ -108,3 +108,10 @@ WEBHOOK_SIGNING_SECRET = os.getenv("WEBHOOK_SIGNING_SECRET", "")
 HOUSEHOLD_WINDOW_DAYS = _int("HOUSEHOLD_WINDOW_DAYS", 30)     # residential IPs rotate; older links expire
 HOUSEHOLD_MAX_MEMBERS = _int("HOUSEHOLD_MAX_MEMBERS", 6)      # more people on one IP = office / CGNAT / café
 HOUSEHOLD_MIN_DAYS = _int("HOUSEHOLD_MIN_DAYS", 2)            # an IP must be seen on 2+ days to count as home
+
+# --- look-alike modelling --------------------------------------------------------
+# Rank the base by resemblance to a consented seed segment (domain.lookalike).
+LOOKALIKE_ENGINE = os.getenv("LOOKALIKE_ENGINE", "sklearn")   # sklearn | builtin (cosine fallback)
+LOOKALIKE_MIN_SEED = _int("LOOKALIKE_MIN_SEED", 25)           # below this a seed is too small to model
+LOOKALIKE_NEG_RATIO = _int("LOOKALIKE_NEG_RATIO", 3)          # sampled unlabelled negatives per seed positive
+LOOKALIKE_DEFAULT_LIMIT = _int("LOOKALIKE_DEFAULT_LIMIT", 500)

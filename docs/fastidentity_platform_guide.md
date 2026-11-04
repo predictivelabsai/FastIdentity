@@ -476,3 +476,18 @@ Tracking issue: [mymedicalgateway/mmg#1420](https://github.com/mymedicalgateway/
 **Deploy.** Push to `main` and the GitHub webhook triggers a Coolify build. The new version takes over only after the `/health` check passes. Manual operations: `python scripts/coolify.py status | env --sync --yes | deploy --yes`.
 
 **Never rotate** `IDENTITY_HASH_SECRET` casually. It permanently breaks probabilistic linkage to all previously hashed signals.
+
+---
+
+## Appendix — Look-alike modelling
+
+A **look-alike** is two jobs, and FastIdentity owns only the first: it builds a clean, consented **seed** and ranks the first-party base by resemblance to it; the ad platform (Meta Lookalike, Google Similar) does the population-level **expansion** from its own graph. Only profiles already in the identity graph are ever scored — strangers are never modelled.
+
+`domain.lookalike` is a small, auditable scikit-learn baseline:
+
+- **Features (first-party only).** Status, recency/tenure, event volume and mix (incl. `product_viewed`, `booking_started`, `order_completed`), resolved interests (`int=treatment:hip replacement`), device classes and household membership. Raw PII, fingerprints and IPs are never features. **Consent is a gate, not a feature.**
+- **Model.** The seed is the positive class; a random sample of the rest are treated as negatives (PU-learning baseline). A logistic-regression pipeline (`DictVectorizer` → `MaxAbsScaler` → `LogisticRegression`, balanced classes) yields a calibrated, inspectable score in `[0, 1]`; `top_features` explains every run.
+- **Output.** Non-seed profiles ranked by score with status + consent flags — ready to filter by consent, hash and sync as a seed, or to prioritise owned-channel outreach. `lookalike_for_segment()` seeds straight from a saved segment (bookers, high-intent, high-value specialty).
+- **Guardrails.** A minimum seed size (default 25; platforms want ~100+ matched); seed on **behaviour/stage, never diagnosis**; exclude converters/opt-outs; re-score on a schedule. A dependency-free cosine-similarity `builtin` engine keeps the feature working where scikit-learn is not installed.
+
+Full detail — features, the PU method, outputs, configuration and the compliance rules — is in **[docs/lookalike_methodology.md](lookalike_methodology.md)** ([PDF](lookalike_methodology.pdf)).

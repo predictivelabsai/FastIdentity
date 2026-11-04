@@ -6,7 +6,7 @@
   size: A4 landscape;
   margin: 1.1cm 1.5cm 1.3cm 1.5cm;
   @bottom-left  { content: "FastIdentity · First-party, consent-first identity resolution"; font-size: 8pt; color: #9aa6b2; }
-  @bottom-right { content: "2026-11-03 · identity.fastsme.com"; font-size: 8pt; color: #9aa6b2; }
+  @bottom-right { content: "2026-11-04 · identity.fastsme.com"; font-size: 8pt; color: #9aa6b2; }
 }
 
 html { font-size: 11.5pt; }
